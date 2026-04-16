@@ -86,9 +86,12 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
             memory: '2Gi'
           }
           env: [
-            { name: 'OPTIMIZER_TIME_LIMIT', value: '25' }
+            { name: 'OPTIMIZER_TIME_LIMIT', value: '50' }
             { name: 'OPTIMIZER_NUM_THREADS', value: '1' }
-            { name: 'GUNICORN_CMD_ARGS', value: '--workers 1 --timeout 60 --max-requests 5000 --max-requests-jitter 500' }
+            {
+              name: 'GUNICORN_CMD_ARGS'
+              value: '--workers 1 --timeout 120 --max-requests 5000 --max-requests-jitter 500'
+            }
             { name: 'JWT_TOKEN_SECRET', secretRef: 'jwt-token-secret' }
           ]
           probes: [
@@ -105,7 +108,7 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
       ]
       scale: {
         minReplicas: 1
-        maxReplicas: 30
+        maxReplicas: 50
         rules: [
           {
             name: 'http-scaling'
@@ -120,6 +123,5 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
     }
   }
 }
-
 
 output fqdn string = containerApp.properties.configuration.ingress.fqdn
