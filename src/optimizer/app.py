@@ -77,7 +77,9 @@ battery_config_model = api.model('BatteryConfig', {
     'c_max': fields.Float(required=True, description='Maximum charge power (W)'),
     'd_max': fields.Float(required=True, description='Maximum discharge power (W)'),
     'p_a': fields.Float(required=True, description='Monetary value per Wh at end of the optimization horizon'),
-    'c_priority': fields.Integer(required=False, description='Charging and discharging priority compared to other batteries. 2 = highest priority.')
+    'c_priority': fields.Integer(required=False, description='Charging and discharging priority compared to other batteries. 2 = highest priority.'),
+    'prc_dpl_soc_high': fields.Float(required=False, description='Price in €/h for higher battery life depletion when sitting at high SOC.'),
+    'prc_dpl_soc_low': fields.Float(required=False, description='Price in €/h for higher battery life depletion when sitting at low SOC.')
 })
 
 time_series_model = api.model('TimeSeries', {
@@ -168,6 +170,8 @@ class OptimizeCharging(Resource):
                     d_max=bat_data['d_max'],
                     p_a=bat_data['p_a'],
                     c_priority=bat_data.get('c_priority', 0),
+                    prc_dpl_soc_high=bat_data.get('prc_dpl_soc_high', 0.0),
+                    prc_dpl_soc_low=bat_data.get('prc_dpl_soc_low', 0.0)
                 ))
 
             # Parse time series data
