@@ -77,7 +77,8 @@ battery_config_model = api.model('BatteryConfig', {
     'c_max': fields.Float(required=True, description='Maximum charge power (W)'),
     'd_max': fields.Float(required=True, description='Maximum discharge power (W)'),
     'p_a': fields.Float(required=True, description='Monetary value per Wh at end of the optimization horizon'),
-    'c_priority': fields.Integer(required=False, description='Charging and discharging priority compared to other batteries. 2 = highest priority.')
+    'c_priority': fields.Integer(required=False, description='Charging and discharging priority compared to other batteries. 2 = highest priority.'),
+    'solar_hold_pct': fields.Float(required=False, description='Solar hold cap as fraction of s_capacity (0..1). Limits charging during solar hours, ramping to full before solar ends.')
 })
 
 time_series_model = api.model('TimeSeries', {
@@ -124,6 +125,14 @@ optimization_result_model = api.model('OptimizationResult', {
 
 @ns.route('/charge-schedule')
 class OptimizeCharging(Resource):
+    @staticmethod
+    def _validate_solar_hold_pct(value):
+        if value is None:
+            return None
+        if not (0 <= value <= 1):
+            api.abort(400, "solar_hold_pct must be between 0 and 1")
+        return value
+
     @api.expect(optimization_input_model, validate=True)
     @api.marshal_with(optimization_result_model)
     def post(self):
@@ -168,6 +177,7 @@ class OptimizeCharging(Resource):
                     d_max=bat_data['d_max'],
                     p_a=bat_data['p_a'],
                     c_priority=bat_data.get('c_priority', 0),
+                    solar_hold_pct=self._validate_solar_hold_pct(bat_data.get('solar_hold_pct')),
                 ))
 
             # Parse time series data

@@ -269,6 +269,14 @@ components:
           maximum: 2
           default: 0
           description: Charging and discharging priority 0..2 compared to other batteries. 2 = highest priority.
+        solar_hold_pct:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: |
+            Solar hold cap as fraction of s_capacity (0..1, e.g. 0.7 for 70%).
+            When set, the optimizer limits charging to this percentage during
+            solar hours, then ramps up to allow full charge before solar production ends.
 
     TimeSeries:
       type: object

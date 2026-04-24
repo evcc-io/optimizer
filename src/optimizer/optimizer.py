@@ -81,10 +81,15 @@ class BatteryConfig:
             Also represents battery aging cost per cycle.
         p_demand: Per-timestep minimum charge demand [Wh]. Used for EVs with
             a minimum charge target. None = no demand.
-        s_goal: Per-timestep SoC goals [Wh]. Soft targets -- the optimizer
+        s_goal: Per-timestep SoC goals [Wh]. Soft targets — the optimizer
             tries to reach them but uses a penalty if it cannot. None = no goals.
         c_priority: Charging/discharging priority 0..2 relative to other
             batteries. Higher values get charged first.
+        solar_hold_pct: Solar hold cap as fraction of s_capacity (0..1).
+            When set, limits battery charging during solar hours to preserve
+            headroom for later solar production. A backward ramp raises the
+            cap before sunset so the battery reaches s_max. Enforced via a
+            binary charging gate (not a penalty).
     """
     charge_from_grid: bool
     discharge_to_grid: bool
@@ -99,6 +104,7 @@ class BatteryConfig:
     p_demand: Optional[List[float]] = None
     s_goal: Optional[List[float]] = None
     c_priority: int = 0
+    solar_hold_pct: Optional[float] = None
 
 
 @dataclass
@@ -149,6 +155,7 @@ class Optimizer:
         y[t]       - Grid flow direction binary: 1=export, 0=import
         z_cd[i][t] - Charge/discharge lock binary: 1=discharging, 0=charging
         z_c[i][t]  - Charge activation binary (only if c_min > 0): 1=charging on
+        z_sh[i][t] - Solar hold gate binary: 1=SoC below cap (charging allowed)
 
     Penalty variables (soft constraints that keep the model feasible):
         s_max_pen[i][t]    - SoC exceeding s_max [Wh]
@@ -164,6 +171,10 @@ class Optimizer:
         prc_p_goal_pen   - Weight for power demand violations
         prc_e_grid_imp_pen - Weight for grid import limit violations
         prc_e_grid_exp_pen - Weight for grid export limit violations
+
+    Pre-computed data:
+        solar_hold_cap[i]  - Per-timestep SoC cap curve [Wh] for solar hold,
+                             or None if solar hold is not active for battery i
     """
 
     def __init__(self, strategy: OptimizationStrategy, grid: GridConfig, batteries: List[BatteryConfig], time_series: TimeSeriesData,
@@ -224,6 +235,84 @@ class Optimizer:
         self.is_grid_demand_rate_active = False
         if self.grid.p_max_imp is not None and self.grid.prc_p_exc_imp is not None:
             self.is_grid_demand_rate_active = True
+
+        # Compute per-battery solar hold cap curves
+        self.solar_hold_cap = self._compute_solar_hold_caps()
+
+    def _compute_solar_hold_caps(self) -> List[Optional[List[float]]]:
+        """
+        Compute per-timestep SoC cap curves for the solar hold feature.
+
+        Returns one entry per battery: None (inactive) or a list of T cap values [Wh].
+
+        Algorithm:
+        1. Detect solar windows (contiguous runs of ft > 0).
+        2. For each battery with solar_hold_pct, skip if solar surplus is
+           insufficient to fill the battery.
+        3. Set day_cap = solar_hold_pct * s_capacity (clamped to [s_min, s_max]).
+        4. Per solar window, walk backward from the end and accumulate chargeable
+           energy. cap[t] = max(day_cap, s_max - remaining_charge). This ramps
+           the cap from day_cap up to s_max near sunset.
+        5. Outside solar windows, cap = s_max (no restriction).
+
+        Enforced by binary gate constraints in _add_battery_constraints().
+        """
+        result = []
+
+        solar_windows = []
+        solar_surplus = 0.0
+        window_start = None
+        for t in self.time_steps:
+            if self.time_series.ft[t] > 0:
+                if window_start is None:
+                    window_start = t
+                surplus = self.time_series.ft[t] - self.time_series.gt[t]
+                if surplus > 0:
+                    solar_surplus += surplus
+            else:
+                if window_start is not None:
+                    solar_windows.append((window_start, t - 1))
+                    window_start = None
+        if window_start is not None:
+            solar_windows.append((window_start, self.T - 1))
+
+        # When multiple batteries have solar_hold_pct, each ramp assumes
+        # exclusive access to the solar surplus (typical: one home battery).
+        for i, bat in enumerate(self.batteries):
+            # Apply server-side default to dischargeable home batteries
+            hold_pct = bat.solar_hold_pct
+            if hold_pct is None and self.settings.solar_hold_pct is not None:
+                if bat.s_capacity is not None and bat.d_max > 0:
+                    hold_pct = self.settings.solar_hold_pct
+                    bat.solar_hold_pct = hold_pct
+
+            if hold_pct is None or not solar_windows:
+                result.append(None)
+                continue
+
+            # Skip if solar surplus cannot fill the battery
+            headroom = max(0, bat.s_max - bat.s_initial)
+            if solar_surplus * self.eta_c < headroom:
+                result.append(None)
+                continue
+
+            day_cap = hold_pct * bat.s_capacity
+            day_cap = min(bat.s_max, max(bat.s_min, day_cap))
+            cap = [bat.s_max] * self.T
+
+            # Backward ramp: accumulate chargeable energy from window end
+            for w_start, w_end in solar_windows:
+                remaining_charge = 0.0
+                for t in range(w_end, w_start - 1, -1):
+                    cap[t] = max(day_cap, bat.s_max - remaining_charge)
+                    surplus = self.time_series.ft[t] - self.time_series.gt[t]
+                    if surplus > 0:
+                        charge_power = min(surplus, bat.c_max)
+                        remaining_charge += self.eta_c * charge_power * self.time_series.dt[t] / 3600.0
+
+            result.append(cap)
+
+        return result
 
     def create_model(self):
         """
@@ -290,6 +379,17 @@ class Optimizer:
         # penalty variable for staying above max SOC and below min SOC
         self.variables['s_max_pen'] = [[pulp.LpVariable(f"s_max_pen_{i}_{t}", lowBound=0) for t in self.time_steps] for i in range(len(self.batteries))]
         self.variables['s_min_pen'] = [[pulp.LpVariable(f"s_min_pen_{i}_{t}", lowBound=0) for t in self.time_steps] for i in range(len(self.batteries))]
+
+        # Solar hold binary gate variable: z_sh[i][t]
+        # z_sh = 1: previous SoC <= cap (charging allowed, SoC capped at cap_t)
+        # z_sh = 0: previous SoC > cap (charging blocked, discharge unrestricted)
+        # Only created for timesteps where cap < s_max (active solar hold).
+        self.variables['z_sh'] = [[None for t in self.time_steps] for i in range(len(self.batteries))]
+        for i, bat in enumerate(self.batteries):
+            if self.solar_hold_cap[i] is not None:
+                for t in self.time_steps:
+                    if self.solar_hold_cap[i][t] < bat.s_max:
+                        self.variables['z_sh'][i][t] = pulp.LpVariable(f"z_sh_{i}_{t}", cat='Binary')
 
         # Grid import/export variables [Wh]
         self.variables['n'] = [pulp.LpVariable(f"n_{t}", lowBound=0) for t in self.time_steps]
@@ -542,6 +642,25 @@ class Optimizer:
             for t in range(0, self.T):
                 self.problem += (self.variables['s_max_pen'][i][t] >= self.variables['s'][i][t] - bat.s_max)
                 self.problem += (self.variables['s_min_pen'][i][t] >= bat.s_min - self.variables['s'][i][t])
+
+        # Solar hold charging gate (Big-M binary formulation).
+        # For active timesteps (cap_t < s_max), z_sh links SoC to charging:
+        #   z=1 (prev_s <= cap): charging allowed, s[t] <= cap_t
+        #   z=0 (prev_s > cap):  charging blocked, discharge unrestricted
+        for i, bat in enumerate(self.batteries):
+            if self.solar_hold_cap[i] is not None:
+                M_sh = bat.s_capacity
+                for t in self.time_steps:
+                    z = self.variables['z_sh'][i][t]
+                    if z is None:
+                        continue
+                    cap_t = self.solar_hold_cap[i][t]
+                    prev_s = bat.s_initial if t == 0 else self.variables['s'][i][t - 1]
+                    c_max_e = bat.c_max * self.time_series.dt[t] / 3600.0
+                    self.problem += (prev_s <= cap_t + M_sh * (1 - z))
+                    self.problem += (prev_s >= cap_t - M_sh * z)
+                    self.problem += (self.variables['c'][i][t] <= c_max_e * z)
+                    self.problem += (self.variables['s'][i][t] <= cap_t + M_sh * (1 - z))
 
         # Constraint (3): Battery dynamics
         for i, bat in enumerate(self.batteries):
