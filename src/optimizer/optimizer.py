@@ -10,12 +10,38 @@ from .settings import OptimizerSettings
 
 @dataclass
 class OptimizationStrategy:
+    """
+    Defines how the optimizer should prefer charging and discharging.
+
+    These are secondary objectives (tiny weights in the objective function)
+    that break ties when the primary economic outcome is equivalent.
+
+    Attributes:
+        charging_strategy: 'charge_before_export' prefers filling batteries
+            before exporting surplus to the grid. 'attenuate_grid_peaks'
+            prefers charging when solar production is high.
+            'none' applies no charging preference.
+        discharging_strategy: 'discharge_before_import' prefers draining
+            batteries before importing from the grid.
+            'none' applies no discharging preference.
+    """
     charging_strategy: str
     discharging_strategy: str
 
 
 @dataclass
 class GridConfig:
+    """
+    Grid connection configuration.
+
+    Attributes:
+        p_max_imp: Maximum grid import power [W]. None = unlimited.
+            When prc_p_exc_imp is also set, this becomes the demand rate
+            threshold instead of a hard limit.
+        p_max_exp: Maximum grid export power [W]. None = unlimited.
+        prc_p_exc_imp: Demand rate price [currency unit/W] applied to the
+            peak power draw above p_max_imp. None = no demand rate.
+    """
     p_max_imp: float
     p_max_exp: float
     prc_p_exc_imp: float
@@ -23,6 +49,43 @@ class GridConfig:
 
 @dataclass
 class BatteryConfig:
+    """
+    Configuration for a single battery (home storage or EV).
+
+    Naming convention: 's' = state/storage (Wh), 'c' = charge, 'd' = discharge,
+    'p' = price/power.
+
+    Attributes:
+        charge_from_grid: If False, battery can only charge from solar surplus
+            (charging is blocked when grid flow direction is import).
+        discharge_to_grid: If False, battery can only discharge to cover local
+            consumption (discharging is blocked when grid flow direction is export).
+        s_capacity: Total physical battery capacity [Wh]. Used as upper bound
+            for SoC variables and as reference for solar_hold_pct.
+        s_min: Minimum usable state of charge [Wh]. The optimizer uses a soft
+            penalty to keep SoC above this value.
+        s_max: Maximum usable state of charge [Wh]. The optimizer uses a soft
+            penalty to keep SoC below this value. Typically s_max < s_capacity
+            to preserve battery health (e.g. 95% of capacity).
+        s_initial: Current state of charge at the start of optimization [Wh].
+            May exceed s_max (e.g. battery was charged to 100% before
+            optimization started).
+        c_min: Minimum charge power [W]. When > 0, the battery must either
+            charge at >= c_min or not charge at all (on/off behavior via
+            binary variable z_c).
+        c_max: Maximum charge power [W].
+        d_max: Maximum discharge power [W]. Set to 0 for batteries that
+            cannot discharge (e.g. EVs that only accept charge).
+        p_a: Monetary value of stored energy [currency unit/Wh]. Applied to
+            the final SoC to incentivize ending with a charged battery.
+            Also represents battery aging cost per cycle.
+        p_demand: Per-timestep minimum charge demand [Wh]. Used for EVs with
+            a minimum charge target. None = no demand.
+        s_goal: Per-timestep SoC goals [Wh]. Soft targets -- the optimizer
+            tries to reach them but uses a penalty if it cannot. None = no goals.
+        c_priority: Charging/discharging priority 0..2 relative to other
+            batteries. Higher values get charged first.
+    """
     charge_from_grid: bool
     discharge_to_grid: bool
     s_capacity: float
@@ -33,30 +96,92 @@ class BatteryConfig:
     c_max: float
     d_max: float
     p_a: float
-    p_demand: Optional[List[float]] = None  # Minimum charge demand (Wh)
-    s_goal: Optional[List[float]] = None  # Goal state of charge (Wh)
+    p_demand: Optional[List[float]] = None
+    s_goal: Optional[List[float]] = None
     c_priority: int = 0
 
 
 @dataclass
 class TimeSeriesData:
-    dt: List[int]  # time step length [s]
-    gt: List[float]  # Required total energy [Wh]
-    ft: List[float]  # Forecasted production [Wh]
-    p_N: List[float]  # Import prices [currency unit/Wh]
-    p_E: List[float]  # Export prices [currency unit/Wh]
+    """
+    Time-discretized input data for the optimization horizon.
+
+    Each list has T elements (one per timestep). Timesteps can have variable
+    duration (dt[t] in seconds). Values represent energy [Wh] or power rates
+    [W] for each timestep.
+
+    Attributes:
+        dt: Duration of each timestep [s]. Typically 900 (15 min). The first
+            timestep may be shorter (partial interval from current time to
+            the next 15-min boundary).
+        gt: Forecasted total energy consumption per timestep [Wh]. Includes
+            all household loads but excludes battery and EV charging.
+        ft: Forecasted solar production per timestep [Wh]. Used to determine
+            solar surplus (ft - gt) and to detect solar windows for the
+            solar hold feature.
+        p_N: Grid import price per timestep [currency unit/Wh]. Higher values
+            incentivize battery discharge to avoid imports.
+        p_E: Grid export price per timestep [currency unit/Wh]. Typically
+            much lower than p_N (feed-in tariff vs retail price).
+    """
+    dt: List[int]
+    gt: List[float]
+    ft: List[float]
+    p_N: List[float]
+    p_E: List[float]
 
 
 class Optimizer:
     """
-    Optimizer class building the MILP model from the input data, and provides
-    solve() function to run optimization and return the results
+    Mixed Integer Linear Programming (MILP) optimizer for battery scheduling.
+
+    Builds and solves a MILP model that maximizes economic benefit by
+    scheduling battery charging/discharging over a time horizon of T
+    timesteps. The model considers grid import/export prices, battery
+    aging costs, and configurable charging/discharging strategies.
+
+    MILP variable naming convention (indices: i=battery, t=timestep):
+        c[i][t]    - Charging energy [Wh] for battery i at timestep t
+        d[i][t]    - Discharging energy [Wh] for battery i at timestep t
+        s[i][t]    - State of charge [Wh] for battery i at end of timestep t
+        n[t]       - Grid import energy [Wh] at timestep t
+        e[t]       - Grid export energy [Wh] at timestep t
+        y[t]       - Grid flow direction binary: 1=export, 0=import
+        z_cd[i][t] - Charge/discharge lock binary: 1=discharging, 0=charging
+        z_c[i][t]  - Charge activation binary (only if c_min > 0): 1=charging on
+
+    Penalty variables (soft constraints that keep the model feasible):
+        s_max_pen[i][t]    - SoC exceeding s_max [Wh]
+        s_min_pen[i][t]    - SoC below s_min [Wh]
+        s_goal_pen[i][t]   - Unmet SoC goal [Wh]
+        p_demand_pen[i][t] - Unmet charge demand [Wh]
+        e_imp_lim_exc[t]   - Grid import exceeding p_max_imp [Wh]
+        e_exp_lim_exc[t]   - Grid export exceeding p_max_exp [Wh]
+
+    Penalty weight naming convention (prc_ prefix = "price of"):
+        prc_soc_exc_pen  - Weight for SoC limit violations (strongest)
+        prc_e_goal_pen   - Weight for energy goal violations
+        prc_p_goal_pen   - Weight for power demand violations
+        prc_e_grid_imp_pen - Weight for grid import limit violations
+        prc_e_grid_exp_pen - Weight for grid export limit violations
     """
 
     def __init__(self, strategy: OptimizationStrategy, grid: GridConfig, batteries: List[BatteryConfig], time_series: TimeSeriesData,
                  eta_c: float = 0.95, eta_d: float = 0.95, M: float = 1e6, optimizer_settings: OptimizerSettings | None = None):
         """
-        Optimizer Constructor
+        Initialize the optimizer with input data and compute derived parameters.
+
+        Args:
+            strategy: Charging/discharging preference strategy.
+            grid: Grid connection limits and demand rate configuration.
+            batteries: List of battery configurations to optimize.
+            time_series: Time-discretized forecast and price data.
+            eta_c: Charging efficiency (0..1). Energy stored = eta_c * energy input.
+            eta_d: Discharging efficiency (0..1). Energy output = eta_d * energy removed.
+            M: Big-M constant for linearizing binary constraints. Must be larger
+                than any variable value in the model.
+            optimizer_settings: Server-side settings (thread count, time limit,
+                default solar_hold_pct).
         """
 
         self.settings = optimizer_settings or OptimizerSettings()
