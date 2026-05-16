@@ -269,7 +269,20 @@ components:
           maximum: 2
           default: 0
           description: Charging and discharging priority 0..2 compared to other batteries. 2 = highest priority.
-
+        prc_dpl_soc_high:
+          type: number
+          minimum: 0
+          description: |
+            Price in €/h for higher battery life depletion when sitting at high SOC.
+            A linear cost model is applied, starting at 80% SOC, applying full price at 100% SOC
+            The battery capacity is assumed to be s_capacity or s_max if s_capacity is not specified
+        prc_dpl_soc_low:
+          type: number
+          minimum: 0
+          description: |
+            Price in €/h for higher battery life depletion when sitting at low SOC.
+            A linear cost model is applied, starting at 20% SOC, applying full price at 0% SOC
+            The battery capacity is assumed to be s_capacity or s_max if s_capacity is not specified
     TimeSeries:
       type: object
       required:

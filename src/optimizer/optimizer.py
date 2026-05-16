@@ -36,6 +36,8 @@ class BatteryConfig:
     p_demand: Optional[List[float]] = None  # Minimum charge demand (Wh)
     s_goal: Optional[List[float]] = None  # Goal state of charge (Wh)
     c_priority: int = 0
+    prc_dpl_soc_high: float = 0.0
+    prc_dpl_soc_low: float = 0.0
 
 
 @dataclass
@@ -216,6 +218,14 @@ class Optimizer:
                 for t in self.time_steps
             ]
 
+        # Cost variable to charge for battery depletion at very high and very low battery SOC state
+        self.variables['cst_bat_dpl'] = {}
+        for i, bat in enumerate(self.batteries):
+            self.variables['cst_bat_dpl'][i] = [
+                pulp.LpVariable(f"cst_bat_dpl_{i}_{t}", lowBound=0)
+                for t in self.time_steps
+            ]
+
     def _setup_target_function(self):
         """
         Gather all target function contributions and instantiate the objective
@@ -256,6 +266,11 @@ class Optimizer:
         # power draw beyond the threshold within the time horizon.
         if self.is_grid_demand_rate_active:
             objective += - self.grid.prc_p_exc_imp * self.variables['p_max_imp_exc']
+
+        # cost for depleting battery life by sitting at very high or very low SOC
+        for i, bat in enumerate(self.batteries):
+            for t in self.time_steps:
+                objective += - self.variables['cst_bat_dpl'][i][t]
 
         ############################################################################
         # Penalties for exceeding battery SOC limits at start
@@ -487,6 +502,25 @@ class Optimizer:
                 self.problem += self.variables['d'][i][t] <= self.M * self.variables['z_cd'][i][t]
                 # Charge constraint
                 self.problem += self.variables['c'][i][t] <= self.M * (1 - self.variables['z_cd'][i][t])
+
+            # cost for depleting battery life by sitting at very high or very low SOC
+            # figure out battery capacity, avoid div 0 in case s_amx is set to 0
+            bat_capacity = self.batteries[i].s_max
+            if self.batteries[i].s_capacity is not None and self.batteries[i].s_capacity > 0.0:
+                bat_capacity = self.batteries[i].s_capacity
+            bat_capacity = max(bat_capacity, 1.0)
+            for t in self.time_steps:
+                # scale the prices to the time step width
+                prc_dpl_soc_high = self.batteries[i].prc_dpl_soc_high / 3600.0 * self.time_series.dt[t]
+                prc_dpl_soc_low = self.batteries[i].prc_dpl_soc_low / 3600.0 * self.time_series.dt[t]
+                # for all SOCs
+                self.problem += self.variables['cst_bat_dpl'][i][t] >= 0
+                # for high SOCs, linear cost ramp starting at 80% SOC, full cost at 100%
+                self.problem += self.variables['cst_bat_dpl'][i][t] \
+                    - ((prc_dpl_soc_high / (0.2 * bat_capacity)) * (self.variables['s'][i][t] - 0.8 * bat_capacity)) >= 0
+                # for low SOCs, linear cost ramp starting at 20% SOC, full cost at 0%
+                self.problem += self.variables['cst_bat_dpl'][i][t] \
+                    - ((prc_dpl_soc_low) * (1.0 - (self.variables['s'][i][t] / (0.2 * bat_capacity)))) >= 0
 
     def solve(self) -> Dict:
         """
