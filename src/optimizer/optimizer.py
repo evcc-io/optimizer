@@ -81,11 +81,7 @@ class Optimizer:
         self.min_import_price = np.min(self.time_series.p_N)
         self.max_import_price = np.max(self.time_series.p_N)
 
-        # Base scaling for all penalty parameters. Penalties must stay strictly
-        # positive so that, in the maximizing objective, they actually discourage
-        # the violations they are subtracted for. Scale with the highest import
-        # price but never below a small positive floor, otherwise zero or negative
-        # market prices would weaken or even invert the penalties.
+        # scaling base for penalty parameters. Make sure goal_penalty is always positive.
         penalty_base = np.max([self.max_import_price, 0.1e-3])
 
         # scaling for penalty parameters
