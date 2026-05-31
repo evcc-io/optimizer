@@ -81,17 +81,20 @@ class Optimizer:
         self.min_import_price = np.min(self.time_series.p_N)
         self.max_import_price = np.max(self.time_series.p_N)
 
-        # scaling for penalty parameters. Make sure goal_penalty is always positive
-        self.prc_e_goal_pen = np.min([self.max_import_price, 0.1e-3]) * 10e1
-        self.prc_p_goal_pen = np.min([self.max_import_price, 0.1e-3]) * np.max(self.time_series.dt) / 3600 * 10e1
-        self.prc_soc_exc_pen = np.min([self.max_import_price, 0.1e-3]) * 10e2
+        # scaling base for penalty parameters. Make sure goal_penalty is always positive.
+        penalty_base = np.max([self.max_import_price, 0.1e-3])
+
+        # scaling for penalty parameters
+        self.prc_e_goal_pen = penalty_base * 10e1
+        self.prc_p_goal_pen = penalty_base * np.max(self.time_series.dt) / 3600 * 10e1
+        self.prc_soc_exc_pen = penalty_base * 10e2
 
         # penalty for exceeding grid import limit. Result shall not become infeasible but report the violation
         # with helpful information
-        self.prc_e_grid_imp_pen = np.min([self.max_import_price, 0.1e-3]) * 10e1
+        self.prc_e_grid_imp_pen = penalty_base * 10e1
         # penalty for exceeding the grid export limit. Result shall not become infeasible but report the 'lost'
         # solar power
-        self.prc_e_grid_exp_pen = np.min([self.max_import_price, 0.1e-3]) * 10e1
+        self.prc_e_grid_exp_pen = penalty_base * 10e1
 
         # if there is a demand rate given in the input, the grid import limit will be interpreted as the
         # threshold beyond wich the demand rate is to be applied. Compute a demand rate flag for use in the
