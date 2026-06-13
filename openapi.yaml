@@ -158,7 +158,9 @@ components:
             Sets a strategy for charging in situations where choices are cost neutral.
             - none (default): no strategy set 
             - charge_before_export: charge batteries before exporting to grid
-            - attenuate_grid_peaks: charge at times with high solar yield to reduce the grid load
+            - attenuate_grid_peaks: charge at times with high solar yield to reduce the grid load.
+              For batteries with `withhold_charge: true` the strategy may also actively withhold charging
+              below the solar peak to keep capacity available for the peak, not just defer it.
         discharging_strategy:
           type: string
           enum: [none, discharge_before_import]
@@ -269,6 +271,14 @@ components:
           maximum: 2
           default: 0
           description: Charging and discharging priority 0..2 compared to other batteries. 2 = highest priority.
+        withhold_charge:
+          type: boolean
+          default: false
+          description: |
+            Signals that the battery hardware can actively pause charging (e.g. hold/stop charge).
+            - True: under the attenuate_grid_peaks strategy the optimizer may withhold charging below the
+              solar peak to keep capacity available for peak shaving, accepting cost-neutral surplus export.
+            - False: (default) the strategy may only re-time (defer) charging, never forgo it.
 
     TimeSeries:
       type: object
