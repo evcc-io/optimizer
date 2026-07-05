@@ -45,9 +45,6 @@ def handle_validation_error(error):
         error.data['details'] = error.data['errors']
         del error.data['errors']
         return error.data, 400
-    elif error.data:
-        # plain api.abort(400, message) calls carry only a message
-        return error.data, 400
     else:
         raise error
 

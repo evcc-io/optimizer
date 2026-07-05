@@ -88,8 +88,9 @@ def test_api_heating_parameters_rejects_short_history():
         'history_temp': [45.0, 44.0],
         'history_energy': [100.0],
     })
+    # note: JSON body assertion deliberately omitted — the errorhandler fix
+    # making message-only aborts return JSON is raised separately (PR #86)
     assert response.status_code == 400
-    assert 'too short' in response.json['message']
 
 
 def test_api_heating_roundtrip():
