@@ -39,6 +39,43 @@ class BatteryConfig:
 
 
 @dataclass
+class HeatingConfig:
+    """
+    A heating device modeled as a leaky thermal store: temperature decays
+    proportionally to itself (losses grow with temperature) and rises with
+    consumed energy. Coefficients are per 15-minute slot, typically fitted
+    from history via fit_heating_model().
+    """
+    temp_min: float  # lower comfort temperature bound (°C)
+    temp_max: float  # upper comfort temperature bound (°C)
+    temp_initial: float  # current temperature (°C)
+    c_max: float  # maximum heating power (W)
+    alpha: float  # temperature change per °C per 15min slot (loss rate, < 0)
+    beta: float  # temperature gain per consumed Wh (°C/Wh, > 0)
+    gamma: float  # constant temperature drift per 15min slot (°C), absorbs ambient
+
+
+def fit_heating_model(temperatures: List[float], energies: List[float]) -> tuple:
+    """
+    Fit the leaky thermal model dT[k] = alpha*T[k] + beta*E[k] + gamma by least
+    squares from history in 15-minute slots: temperatures (°C, K+1 samples or K)
+    and energy consumed by the heating device (Wh per slot).
+    Returns (alpha, beta, gamma).
+    """
+    temps = np.asarray(temperatures, dtype=float)
+    energy = np.asarray(energies, dtype=float)
+    n = temps.size - 1
+    if n < 3 or energy.size < n:
+        raise ValueError("heating history too short to fit thermal model")
+    X = np.column_stack([temps[:n], energy[:n], np.ones(n)])
+    dT = np.diff(temps)
+    (alpha, beta, gamma), *_ = np.linalg.lstsq(X, dT, rcond=None)
+    if beta <= 0:
+        raise ValueError("heating history shows no heating effect (fitted beta <= 0)")
+    return float(alpha), float(beta), float(gamma)
+
+
+@dataclass
 class TimeSeriesData:
     dt: List[int]  # time step length [s]
     gt: List[float]  # Required total energy [Wh]
@@ -54,7 +91,8 @@ class Optimizer:
     """
 
     def __init__(self, strategy: OptimizationStrategy, grid: GridConfig, batteries: List[BatteryConfig], time_series: TimeSeriesData,
-                 eta_c: float = 0.95, eta_d: float = 0.95, M: float = 1e6, optimizer_settings: OptimizerSettings | None = None):
+                 eta_c: float = 0.95, eta_d: float = 0.95, M: float = 1e6, optimizer_settings: OptimizerSettings | None = None,
+                 heating: Optional[List[HeatingConfig]] = None):
         """
         Optimizer Constructor
         """
@@ -64,6 +102,7 @@ class Optimizer:
         self.strategy = strategy
         self.grid = grid
         self.batteries = batteries
+        self.heating = heating or []
         self.time_series = time_series
         self.eta_c = eta_c
         self.eta_d = eta_d
@@ -115,6 +154,7 @@ class Optimizer:
         self._setup_target_function()
         self._add_energy_balance_constraints()
         self._add_battery_constraints()
+        self._add_heating_constraints()
 
     def _setup_variables(self):
         """
@@ -168,6 +208,20 @@ class Optimizer:
         # penalty variable for staying above max SOC and below min SOC
         self.variables['s_max_pen'] = [[pulp.LpVariable(f"s_max_pen_{i}_{t}", lowBound=0) for t in self.time_steps] for i in range(len(self.batteries))]
         self.variables['s_min_pen'] = [[pulp.LpVariable(f"s_min_pen_{i}_{t}", lowBound=0) for t in self.time_steps] for i in range(len(self.batteries))]
+
+        # Heating device energy input [Wh], temperature [°C] and comfort band penalties
+        self.variables['h'] = {}
+        self.variables['temp'] = {}
+        self.variables['temp_min_pen'] = {}
+        self.variables['temp_max_pen'] = {}
+        for i, heat in enumerate(self.heating):
+            self.variables['h'][i] = [
+                pulp.LpVariable(f"h_{i}_{t}", lowBound=0, upBound=heat.c_max * self.time_series.dt[t] / 3600.)
+                for t in self.time_steps
+            ]
+            self.variables['temp'][i] = [pulp.LpVariable(f"temp_{i}_{t}") for t in self.time_steps]
+            self.variables['temp_min_pen'][i] = [pulp.LpVariable(f"temp_min_pen_{i}_{t}", lowBound=0) for t in self.time_steps]
+            self.variables['temp_max_pen'][i] = [pulp.LpVariable(f"temp_max_pen_{i}_{t}", lowBound=0) for t in self.time_steps]
 
         # Grid import/export variables [Wh]
         self.variables['n'] = [pulp.LpVariable(f"n_{t}", lowBound=0) for t in self.time_steps]
@@ -266,6 +320,13 @@ class Optimizer:
             for t in self.time_steps:
                 objective += - self.prc_soc_exc_pen * (self.variables['s_max_pen'][i][t] + self.variables['s_min_pen'][i][t])
 
+        # Penalties for leaving the heating comfort band, converted °C -> Wh via beta
+        # so they weigh like the SOC penalties above
+        for i, heat in enumerate(self.heating):
+            for t in self.time_steps:
+                objective += - self.prc_soc_exc_pen / heat.beta \
+                    * (self.variables['temp_min_pen'][i][t] + self.variables['temp_max_pen'][i][t])
+
         ############################################################################
         # Penalties for goals that cannot be met
         for i, bat in enumerate(self.batteries):
@@ -361,11 +422,15 @@ class Optimizer:
             if self.grid.p_max_exp is not None:
                 e_grid_exp = self.variables['e'][t]+self.variables['e_exp_lim_exc'][t]
 
+            # heating devices consume energy like home consumption
+            heating_load = pulp.lpSum(self.variables['h'][i][t] for i in range(len(self.heating)))
+
             self.problem += (battery_net_discharge
                              + self.time_series.ft[t]
                              + e_grid_imp
                              == e_grid_exp
-                             + self.time_series.gt[t])
+                             + self.time_series.gt[t]
+                             + heating_load)
 
         # Constraints (4)-(5): Grid flow direction
         for t in self.time_steps:
@@ -491,6 +556,29 @@ class Optimizer:
                 # Charge constraint
                 self.problem += self.variables['c'][i][t] <= self.M * (1 - self.variables['z_cd'][i][t])
 
+    def _add_heating_constraints(self):
+        """
+        Add constraints for heating devices: leaky thermal store dynamics and
+        soft comfort band. Unlike batteries, stored heat leaks away with a rate
+        proportional to temperature (alpha < 0) and cannot be discharged back.
+        """
+        for i, heat in enumerate(self.heating):
+            for t in self.time_steps:
+                # scale per-15min fit coefficients to the actual slot length
+                scale = self.time_series.dt[t] / 900.
+                prev = heat.temp_initial if t == 0 else self.variables['temp'][i][t - 1]
+                self.problem += (self.variables['temp'][i][t]
+                                 == prev
+                                 + heat.alpha * scale * prev
+                                 + heat.beta * self.variables['h'][i][t]
+                                 + heat.gamma * scale)
+
+                # soft comfort band
+                self.problem += (self.variables['temp_max_pen'][i][t]
+                                 >= self.variables['temp'][i][t] - heat.temp_max)
+                self.problem += (self.variables['temp_min_pen'][i][t]
+                                 >= heat.temp_min - self.variables['temp'][i][t])
+
     def solve(self) -> Dict:
         """
         Creates the MILP model if none exists and solves the optimization problem.
@@ -546,6 +634,7 @@ class Optimizer:
                     'grid_export_limit_hit': grid_exp_limit_hit
                 },
                 'batteries': [],
+                'heating': [],
                 'grid_import': e_grid_import,
                 'grid_export': e_grid_export,
                 'flow_direction': [],
@@ -561,6 +650,13 @@ class Optimizer:
                     'state_of_charge': [pulp.value(var) for var in self.variables['s'][i]]
                 }
                 result['batteries'].append(battery_result)
+
+            # Extract heating results
+            for i, heat in enumerate(self.heating):
+                result['heating'].append({
+                    'heating_energy': [pulp.value(var) for var in self.variables['h'][i]],
+                    'temperature': [pulp.value(var) for var in self.variables['temp'][i]]
+                })
 
             # Extract flow direction
             for y_var in self.variables['y']:
@@ -579,6 +675,7 @@ class Optimizer:
                     'grid_export_limit_hit': False
                 },
                 'batteries': [],
+                'heating': [],
                 'grid_import': [],
                 'grid_export': [],
                 'flow_direction': [],
