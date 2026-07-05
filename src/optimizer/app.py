@@ -45,6 +45,9 @@ def handle_validation_error(error):
         error.data['details'] = error.data['errors']
         del error.data['errors']
         return error.data, 400
+    elif error.data:
+        # plain api.abort(400, message) calls carry only a message
+        return error.data, 400
     else:
         raise error
 
@@ -87,6 +90,17 @@ heating_config_model = api.model('HeatingConfig', {
     'c_max': fields.Float(required=True, description='Maximum heating power (W)'),
     'history_temp': fields.List(fields.Float, required=True, description='Historic temperatures in 15-minute slots (°C)'),
     'history_energy': fields.List(fields.Float, required=True, description='Historic energy consumed by the heating device in 15-minute slots (Wh)'),
+})
+
+heating_history_model = api.model('HeatingHistory', {
+    'history_temp': fields.List(fields.Float, required=True, description='Historic temperatures in 15-minute slots (°C)'),
+    'history_energy': fields.List(fields.Float, required=True, description='Historic energy consumed by the heating device in 15-minute slots (Wh)'),
+})
+
+heating_parameters_model = api.model('HeatingParameters', {
+    'alpha': fields.Float(description='Temperature change per °C per 15-minute slot (loss rate, < 0)'),
+    'beta': fields.Float(description='Temperature gain per consumed Wh (°C/Wh)'),
+    'gamma': fields.Float(description='Constant temperature drift per 15-minute slot (°C), absorbs ambient conditions'),
 })
 
 time_series_model = api.model('TimeSeries', {
@@ -248,6 +262,28 @@ class OptimizeCharging(Resource):
 
         except Exception as e:
             api.abort(500, f"Optimization failed: {str(e)}")
+
+
+@ns.route('/heating-parameters')
+class FitHeatingParameters(Resource):
+    @api.expect(heating_history_model, validate=True)
+    @api.marshal_with(heating_parameters_model)
+    def post(self):
+        """
+        Fit heating device thermal model parameters from history
+
+        Fits the leaky thermal store model dT = alpha*T + beta*E + gamma by
+        least squares from 15-minute history slots of temperature and consumed
+        energy. The same fit runs implicitly inside the charge-schedule
+        optimization; this endpoint exposes it for inspection and validation.
+        """
+        try:
+            alpha, beta, gamma = fit_heating_model(
+                api.payload['history_temp'], api.payload['history_energy'])
+        except ValueError as e:
+            api.abort(400, str(e))
+
+        return {'alpha': alpha, 'beta': beta, 'gamma': gamma}
 
 
 @ns.route('/health')

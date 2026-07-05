@@ -125,6 +125,46 @@ paths:
               example:
                 message: "Optimization failed: Infeasible problem"
 
+  /optimize/heating-parameters:
+    post:
+      tags:
+        - optimization
+      summary: Fit heating device thermal model parameters from history
+      description: |
+        Fits the leaky thermal store model dT = alpha*T + beta*E + gamma by
+        least squares from 15-minute history slots of temperature and consumed
+        energy. The same fit runs implicitly inside the charge-schedule
+        optimization when heating devices are supplied; this endpoint exposes
+        it separately for inspection and validation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HeatingHistory"
+            example:
+              history_temp: [51.2, 51.8, 52.5, 52.1, 51.6, 51.2]
+              history_energy: [400, 420, 150, 0, 0, 80]
+      responses:
+        "200":
+          description: Thermal model fitted successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HeatingParameters"
+              example:
+                alpha: -0.02
+                beta: 0.004
+                gamma: 0.3
+        "400":
+          description: Bad request - history too short or shows no heating effect
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: "heating history too short to fit thermal model"
+
   /optimize/health:
     get:
       tags:
@@ -313,6 +353,42 @@ components:
             minimum: 0
           description: Historic energy consumed by the heating device in 15-minute slots (Wh)
           example: [400, 420, 150, 0, 0, 80]
+
+    HeatingHistory:
+      type: object
+      required:
+        - history_temp
+        - history_energy
+      properties:
+        history_temp:
+          type: array
+          items:
+            type: number
+          description: Historic device temperatures in 15-minute slots (°C)
+          example: [51.2, 51.8, 52.5, 52.1, 51.6, 51.2]
+        history_energy:
+          type: array
+          items:
+            type: number
+            minimum: 0
+          description: Historic energy consumed by the heating device in 15-minute slots (Wh)
+          example: [400, 420, 150, 0, 0, 80]
+
+    HeatingParameters:
+      type: object
+      properties:
+        alpha:
+          type: number
+          description: Temperature change per °C per 15-minute slot (loss rate, < 0)
+          example: -0.02
+        beta:
+          type: number
+          description: Temperature gain per consumed Wh (°C/Wh)
+          example: 0.004
+        gamma:
+          type: number
+          description: Constant temperature drift per 15-minute slot (°C), absorbs ambient conditions
+          example: 0.3
 
     TimeSeries:
       type: object

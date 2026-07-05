@@ -70,6 +70,28 @@ def test_heating_shifts_to_cheap_slots():
     assert np.isclose(sum(result['grid_import']), sum(energy), atol=1e-6)
 
 
+def test_api_heating_parameters_endpoint():
+    temps, energies = synth_history()
+    response = app.test_client().post('/optimize/heating-parameters', json={
+        'history_temp': temps,
+        'history_energy': energies,
+    })
+    assert response.status_code == 200, response.text
+    body = response.json
+    assert np.isclose(body['alpha'], ALPHA, atol=1e-8)
+    assert np.isclose(body['beta'], BETA, atol=1e-8)
+    assert np.isclose(body['gamma'], GAMMA, atol=1e-6)
+
+
+def test_api_heating_parameters_rejects_short_history():
+    response = app.test_client().post('/optimize/heating-parameters', json={
+        'history_temp': [45.0, 44.0],
+        'history_energy': [100.0],
+    })
+    assert response.status_code == 400
+    assert 'too short' in response.json['message']
+
+
 def test_api_heating_roundtrip():
     temps, energies = synth_history()
     T = 6
