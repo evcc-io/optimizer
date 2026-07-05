@@ -34,3 +34,25 @@ def test_optimizer(test_case: pathlib.Path):
                              expected_objective_value,
                              rtol=1e-05, atol=1e-08, equal_nan=False), \
             f"objective value: {actual_objective_value}, expected was: {expected_objective_value}"
+
+
+def test_abort_returns_json_message():
+    # message-only api.abort(400, ...) must return a JSON body, not an empty response
+    client = app.test_client()
+    request = {
+        "batteries": [{
+            "s_min": 0, "s_max": 10000, "s_initial": 5000,
+            "c_min": 0, "c_max": 5000, "d_max": 5000, "p_a": 0.1,
+        }],
+        "time_series": {
+            "dt": [3600, 3600],
+            "gt": [1000, 1000],
+            "ft": [0, 0],
+            "p_N": [0.3, 0.3],
+            "p_E": [0.1],  # length mismatch triggers api.abort(400, message)
+        },
+    }
+    response = client.post("/optimize/charge-schedule", json=request)
+    assert response.status_code == 400
+    assert response.json is not None
+    assert "message" in response.json
