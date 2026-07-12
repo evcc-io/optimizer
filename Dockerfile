@@ -20,6 +20,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM python:3.13-slim
 
+# Create non-root user
+RUN groupadd -r app && useradd -r -g app -s /bin/false app
+
 # Copy the environment, but not the source code
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 
@@ -28,4 +31,5 @@ ENV PYTHONUNBUFFERED=1
 ENV OPTIMIZER_TIME_LIMIT=25
 ENV OPTIMIZER_NUM_THREADS=1
 ENV GUNICORN_CMD_ARGS="--workers 4 --max-requests 32" 
+USER app
 CMD ["/app/.venv/bin/gunicorn", "--bind", "0.0.0.0:7050", "optimizer.app:app"]
