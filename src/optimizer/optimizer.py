@@ -481,7 +481,7 @@ class Optimizer:
                         self.problem += (self.variables['c'][i][t] >= bat.c_min * self.time_series.dt[t] / 3600.
                                          * self.variables['z_c'][i][t])
                         self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
-                                     * self.variables['z_c'][i][t])
+                                         * self.variables['z_c'][i][t])
 
             # Constraint (7): Minimum charge power limits if there is not charge demand
             elif bat.c_min > 0:
