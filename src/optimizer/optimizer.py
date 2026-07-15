@@ -211,13 +211,19 @@ class Optimizer:
             else:
                 self.variables['z_c'][i] = None
 
-        # Binary variable to lock charging against discharging
+        # Binary variable to lock charging against discharging. A battery
+        # that cannot discharge (d_max=0) or cannot charge (c_max=0) needs no
+        # lock: the constraint pair is vacuous, and the binaries only add
+        # integrality work for the solver.
         self.variables['z_cd'] = {}
         for i, bat in enumerate(self.batteries):
-            self.variables['z_cd'][i] = [
-                pulp.LpVariable(f"z_cd_{i}_{t}", cat='Binary')
-                for t in self.time_steps
-            ]
+            if bat.c_max > 0 and bat.d_max > 0:
+                self.variables['z_cd'][i] = [
+                    pulp.LpVariable(f"z_cd_{i}_{t}", cat='Binary')
+                    for t in self.time_steps
+                ]
+            else:
+                self.variables['z_cd'][i] = None
 
     def _setup_target_function(self):
         """
@@ -504,14 +510,16 @@ class Optimizer:
                     self.problem += (self.variables['d'][i][t] <= bat.d_max * self.time_series.dt[t] / 3600.
                                      * (1 - self.variables['y'][t]))
 
-            # lock charging against discharging
-            for t in self.time_steps:
-                # Discharge constraint
-                self.problem += (self.variables['d'][i][t] <= bat.d_max * self.time_series.dt[t] / 3600.
-                                 * self.variables['z_cd'][i][t])
-                # Charge constraint
-                self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
-                                 * (1 - self.variables['z_cd'][i][t]))
+            # lock charging against discharging (skipped when the battery
+            # cannot both charge and discharge: nothing to lock)
+            if self.variables['z_cd'][i] is not None:
+                for t in self.time_steps:
+                    # Discharge constraint
+                    self.problem += (self.variables['d'][i][t] <= bat.d_max * self.time_series.dt[t] / 3600.
+                                     * self.variables['z_cd'][i][t])
+                    # Charge constraint
+                    self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
+                                     * (1 - self.variables['z_cd'][i][t]))
 
     def solve(self) -> Dict:
         """
