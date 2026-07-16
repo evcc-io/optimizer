@@ -141,7 +141,10 @@ class Optimizer:
         self.variables['s'] = {}
         for i, bat in enumerate(self.batteries):
             self.variables['s'][i] = [
-                pulp.LpVariable(f"s_{i}_{t}", lowBound=0, upBound=bat.s_capacity)
+                pulp.LpVariable(
+                    f"s_{i}_{t}",
+                    lowBound=bat.s_min if bat.s_min <= bat.s_initial <= bat.s_max else 0,
+                    upBound=bat.s_max if bat.s_min <= bat.s_initial <= bat.s_max else bat.s_capacity)
                 for t in self.time_steps
             ]
 
@@ -323,7 +326,10 @@ class Optimizer:
                 objective += self.variables['c'][i][t] * self.min_import_price * 5e-5 * (self.T - t) * bat.c_priority
                 objective += self.variables['d'][i][t] * self.min_import_price * 5e-5 * (self.T - t) * bat.c_priority
 
-        self.problem += objective
+        # scale the solver-facing objective so CBC's absolute tolerances
+        # (integrality 1e-6, cutoff increment 1e-5) can separate near-ties;
+        # reported values are recomputed from variables and stay unscaled
+        self.problem += objective * 1e4
 
     def _add_energy_balance_constraints(self):
         """
@@ -430,6 +436,8 @@ class Optimizer:
         # greater than the maximum SOC or lesser than min SOC, maximum discharging is forced until the max.
         # SOC is reached or max. charing will be forced until min SOC is reached.
         for i, bat in enumerate(self.batteries):
+            if bat.s_min <= bat.s_initial <= bat.s_max:
+                continue  # SOC kept in range by hard variable bounds
             for t in range(0, self.T):
                 self.problem += (self.variables['s_max_pen'][i][t] >= self.variables['s'][i][t] - bat.s_max)
                 self.problem += (self.variables['s_min_pen'][i][t] >= bat.s_min - self.variables['s'][i][t])
