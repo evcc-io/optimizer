@@ -459,15 +459,11 @@ class Optimizer:
                         self.problem += (self.variables['c'][i][t] + self.variables['p_demand_pen'][i][t]
                                          + self.M * (1 - self.variables['z_p_demand'][i][t])
                                          - (self.batteries[i].s_max - self.variables['s'][i][t]) >= 0.)
-                    elif bat.c_min > 0:
-                        # in time steps without given charging demand, apply normal lower bound:
-                        # Lower bound: either 0 or at least c_min
-                        self.problem += (self.variables['c'][i][t] >= bat.c_min * self.time_series.dt[t] / 3600.
-                                         * self.variables['z_c'][i][t])
-                        self.problem += (self.variables['c'][i][t] <= self.M * self.variables['z_c'][i][t])
 
-            # Constraint (7): Minimum charge power limits if there is not charge demand
-            elif bat.c_min > 0:
+            # Constraint (7): Semi-continuous charge power - c is either 0 or >= c_min.
+            # Applied in every time step, including charge-demand slots, so a real charger's
+            # minimum current is respected and the solver cannot pick sub-minimum power.
+            if bat.c_min > 0:
                 for t in self.time_steps:
                     # Lower bound: either 0 or at least c_min
                     self.problem += (self.variables['c'][i][t] >= bat.c_min * self.time_series.dt[t] / 3600.
