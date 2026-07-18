@@ -3,8 +3,6 @@ slot, including charge-demand slots. Previously the min-charge constraint was
 skipped whenever p_demand[t] > 0, letting the solver return sub-minimum power
 (e.g. ~950 W for a charger whose real minimum is far higher)."""
 
-import numpy
-
 from optimizer.app import app
 
 C_MIN = 1400.0  # W, e.g. 1p x 230V x ~6A
