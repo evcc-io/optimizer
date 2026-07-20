@@ -186,8 +186,8 @@ if action == "run":
             df_diagram[f"P_bat{i}"] = np.multiply(np.subtract(bat["discharging_power"], bat["charging_power"]), ts_Wh_to_kW)
             df_diagram[f"SOC_bat{i}"] = np.divide(bat["state_of_charge"], bat_capacity)*100
             df_diagram[f"P_bat{i}_exp"] = np.multiply(np.subtract(expected_response["batteries"][i]["discharging_power"],
-                                                                expected_response["batteries"][i]["charging_power"]),
-                                                    ts_Wh_to_kW)
+                                                                  expected_response["batteries"][i]["charging_power"]),
+                                                      ts_Wh_to_kW)
             df_diagram[f"P_bat{i}_dev"] = np.divide(np.subtract(df_diagram[f"P_bat{i}"], df_diagram[f"P_bat{i}_exp"]), df_diagram[f"P_bat{i}_exp"])
 
         df_diagram['time'] = pd.to_datetime(df_diagram['time'], unit='s')
