@@ -449,8 +449,9 @@ class Optimizer:
                 for t in self.time_steps:
                     if bat.p_demand[t] > 0:
                         # clip required charge to max charging power if needed
-                        # and leave some air to breathe for the optimizer
                         p_demand = min(bat.c_max * self.time_series.dt[t] / 3600., bat.p_demand[t])
+                        # clip required charge to min charging power where needed
+                        p_demand = max(bat.c_min * self.time_series.dt[t] / 3600., bat.p_demand[t])
                         # two alternative constraints, only one is active:
                         # constraint option 1: charge energy tries to reach min charge energy parameter
                         self.problem += (self.variables['c'][i][t] + self.variables['p_demand_pen'][i][t]
