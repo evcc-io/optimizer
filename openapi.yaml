@@ -153,12 +153,14 @@ components:
       properties:
         charging_strategy:
           type: string
-          enum: [none, charge_before_export, attenuate_grid_peaks]
+          enum: [none, charge_before_export, attenuate_demand_peaks, attenuate_feedin_peaks, attenuate_grid_peaks]
           description: |
             Sets a strategy for charging in situations where choices are cost neutral.
             - none (default): no strategy set 
             - charge_before_export: charge batteries before exporting to grid
-            - attenuate_grid_peaks: level the grid import profile, charging at partial power over several time steps instead of one peak
+            - attenuate_demand_peaks: level the grid import profile, charging at partial power over several time steps instead of one peak
+            - attenuate_feedin_peaks: level the grid export profile, charging to shave solar feed-in peaks
+            - attenuate_grid_peaks: level both the grid import and the grid export profile
         discharging_strategy:
           type: string
           enum: [none, discharge_before_import]
