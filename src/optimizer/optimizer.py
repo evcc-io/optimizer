@@ -36,6 +36,7 @@ class BatteryConfig:
     p_demand: Optional[List[float]] = None  # Minimum charge demand (Wh)
     s_goal: Optional[List[float]] = None  # Goal state of charge (Wh)
     c_priority: int = 0
+    withhold_charge: bool = False  # battery can actively pause charging (enables withholding under attenuate_grid_peaks)
 
 
 @dataclass
@@ -80,6 +81,9 @@ class Optimizer:
         # Compute scaling for strategy control parameters
         self.min_import_price = np.min(self.time_series.p_N)
         self.max_import_price = np.max(self.time_series.p_N)
+
+        # peak solar production over the horizon, used to scale the attenuate_grid_peaks strategy
+        self.max_solar = np.max(self.time_series.ft) if len(self.time_series.ft) else 0.0
 
         # scaling base for penalty parameters. Make sure goal_penalty is always positive.
         penalty_base = np.max([self.max_import_price, 0.1e-3])
@@ -309,7 +313,13 @@ class Optimizer:
         if self.strategy.charging_strategy == 'attenuate_grid_peaks':
             for i, bat in enumerate(self.batteries):
                 for t in self.time_steps:
+                    # defer charging towards high solar production (attenuates the export peak)
                     objective += self.variables['c'][i][t] * self.time_series.ft[t] * self.min_import_price * 1e-6
+                    # if the battery hardware can pause charging, actively withhold charging below the
+                    # solar peak so capacity stays available to absorb the peak. Without this capability the
+                    # strategy may only re-time (defer) charging, not forgo it.
+                    if bat.withhold_charge:
+                        objective -= self.variables['c'][i][t] * (self.max_solar - self.time_series.ft[t]) * self.min_import_price * 1e-6
 
         # prefer discharging batteries completely before importing from grid
         if self.strategy.discharging_strategy == 'discharge_before_import':

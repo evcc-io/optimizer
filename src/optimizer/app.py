@@ -80,7 +80,11 @@ battery_config_model = api.model('BatteryConfig', {
     'c_max': fields.Float(required=True, description='Maximum charge power (W)'),
     'd_max': fields.Float(required=True, description='Maximum discharge power (W)'),
     'p_a': fields.Float(required=True, description='Monetary value per Wh at end of the optimization horizon'),
-    'c_priority': fields.Integer(required=False, description='Charging and discharging priority compared to other batteries. 2 = highest priority.')
+    'c_priority': fields.Integer(required=False, description='Charging and discharging priority compared to other batteries. 2 = highest priority.'),
+    'withhold_charge': fields.Boolean(
+        required=False,
+        description='Battery can actively pause charging; lets the attenuate_grid_peaks strategy '
+                    'withhold (not just defer) charging below the solar peak to reserve capacity.')
 })
 
 time_series_model = api.model('TimeSeries', {
@@ -171,6 +175,7 @@ class OptimizeCharging(Resource):
                     d_max=bat_data['d_max'],
                     p_a=bat_data['p_a'],
                     c_priority=bat_data.get('c_priority', 0),
+                    withhold_charge=bat_data.get('withhold_charge', False),
                 ))
 
             # Parse time series data
