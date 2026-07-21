@@ -281,7 +281,7 @@ class Optimizer:
             # unmet charging demand due to battery reaching maximum SOC with incentive to do charging early
             if bat.p_demand is not None:
                 for t in self.time_steps:
-                    objective +=  - self.prc_p_goal_pen \
+                    objective += - self.prc_p_goal_pen \
                         * self.variables['p_demand_pen'][i][t] \
                         * (1 + (self.T - t)/self.T)
 
@@ -459,14 +459,14 @@ class Optimizer:
                         self.problem += ((bat.s_max - self.variables['s'][i][t])
                                          <= (1 - self.variables['z_p_demand'][i][t]) * self.M
                                          + bat.c_min * self.time_series.dt[t] / 3600.)
-                        
-                        # introduce z_s_max_reached to become only 1 if s_max is fully reached 
+
+                        # introduce z_s_max_reached to become only 1 if s_max is fully reached
                         self.problem += ((bat.s_max - self.variables['s'][i][t])
-                                         <= (1 - self.variables['z_s_max_reached'][i][t]) * self.M )
-                        
+                                         <= (1 - self.variables['z_s_max_reached'][i][t]) * self.M)
+
                         # set a "soft" constraint to reach the requested charging rate if possible.
                         # deactivate it if s_max is already reached
-                        self.problem += (self.variables['c'][i][t] + self.variables['p_demand_pen'][i][t] 
+                        self.problem += (self.variables['c'][i][t] + self.variables['p_demand_pen'][i][t]
                                          >= (1 - self.variables['z_s_max_reached'][i][t]) * p_demand)
 
                     if bat.c_min > 0:
