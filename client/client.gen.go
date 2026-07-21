@@ -200,7 +200,7 @@ type OptimizerStrategy struct {
 	// ChargingStrategy Sets a strategy for charging in situations where choices are cost neutral.
 	// - none (default): no strategy set
 	// - charge_before_export: charge batteries before exporting to grid
-	// - attenuate_grid_peaks: charge at times with high solar yield to reduce the grid load
+	// - attenuate_grid_peaks: level the grid import profile, charging at partial power over several time steps instead of one peak
 	ChargingStrategy OptimizerStrategyChargingStrategy `json:"charging_strategy,omitempty"`
 
 	// DischargingStrategy Sets a strategy for charging in situations where choices are cost neutral.
@@ -212,7 +212,7 @@ type OptimizerStrategy struct {
 // OptimizerStrategyChargingStrategy Sets a strategy for charging in situations where choices are cost neutral.
 // - none (default): no strategy set
 // - charge_before_export: charge batteries before exporting to grid
-// - attenuate_grid_peaks: charge at times with high solar yield to reduce the grid load
+// - attenuate_grid_peaks: level the grid import profile, charging at partial power over several time steps instead of one peak
 type OptimizerStrategyChargingStrategy string
 
 // OptimizerStrategyDischargingStrategy Sets a strategy for charging in situations where choices are cost neutral.

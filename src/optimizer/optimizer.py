@@ -82,19 +82,19 @@ class Optimizer:
         self.max_import_price = np.max(self.time_series.p_N)
 
         # scaling base for penalty parameters. Make sure goal_penalty is always positive.
-        penalty_base = np.max([self.max_import_price, 0.1e-3])
+        self.penalty_base = np.max([self.max_import_price, 0.1e-3])
 
         # scaling for penalty parameters
-        self.prc_e_goal_pen = penalty_base * 10e1
-        self.prc_p_goal_pen = penalty_base * np.max(self.time_series.dt) / 3600 * 10e1
-        self.prc_soc_exc_pen = penalty_base * 10e2
+        self.prc_e_goal_pen = self.penalty_base * 10e1
+        self.prc_p_goal_pen = self.penalty_base * np.max(self.time_series.dt) / 3600 * 10e1
+        self.prc_soc_exc_pen = self.penalty_base * 10e2
 
         # penalty for exceeding grid import limit. Result shall not become infeasible but report the violation
         # with helpful information
-        self.prc_e_grid_imp_pen = penalty_base * 10e1
+        self.prc_e_grid_imp_pen = self.penalty_base * 10e1
         # penalty for exceeding the grid export limit. Result shall not become infeasible but report the 'lost'
         # solar power
-        self.prc_e_grid_exp_pen = penalty_base * 10e1
+        self.prc_e_grid_exp_pen = self.penalty_base * 10e1
 
         # if there is a demand rate given in the input, the grid import limit will be interpreted as the
         # threshold beyond wich the demand rate is to be applied. Compute a demand rate flag for use in the
@@ -191,6 +191,10 @@ class Optimizer:
         # within the time horizon (W)
         if self.is_grid_demand_rate_active:
             self.variables['p_max_imp_exc'] = pulp.LpVariable("p_max_imp_exc", lowBound=0)
+
+        # highest grid import power over the whole horizon (W), used by the peak attenuation strategy
+        if self.strategy.charging_strategy == 'attenuate_grid_peaks':
+            self.variables['p_imp_peak'] = pulp.LpVariable("p_imp_peak", lowBound=0)
 
         # Binary variable: power flow direction to / from grid variables
         # these variables
@@ -305,11 +309,13 @@ class Optimizer:
                 for t in self.time_steps:
                     objective += - self.variables['e'][t] * self.min_import_price * 2e-5 * (self.T - t)
 
-        # prefer charging at high solar production times to unload public grid from peaks
+        # level the grid import profile to unload the public grid from peaks.
+        # the penalty sits on the horizon maximum instead of on charge power, so the optimizer spreads
+        # charging at partial power over several time steps rather than running one step at full power.
+        # penalty_base is used instead of min_import_price because negative market prices would turn
+        # this penalty into a reward for peaks.
         if self.strategy.charging_strategy == 'attenuate_grid_peaks':
-            for i, bat in enumerate(self.batteries):
-                for t in self.time_steps:
-                    objective += self.variables['c'][i][t] * self.time_series.ft[t] * self.min_import_price * 1e-6
+            objective += - self.variables['p_imp_peak'] * self.penalty_base * 1e-3
 
         # prefer discharging batteries completely before importing from grid
         if self.strategy.discharging_strategy == 'discharge_before_import':
@@ -401,6 +407,14 @@ class Optimizer:
                                  <= self.M * self.variables['z_exp_lim'][t])
                 self.problem += (self.variables['e_exp_lim_exc'][t]
                                  <= self.M * (1 - self.variables['z_exp_lim'][t]))
+
+        # track the horizon maximum of the total import power for the peak attenuation strategy
+        if self.strategy.charging_strategy == 'attenuate_grid_peaks':
+            for t in self.time_steps:
+                e_grid_imp = self.variables['n'][t]
+                if self.grid.p_max_imp is not None:
+                    e_grid_imp = e_grid_imp + self.variables['e_imp_lim_exc'][t]
+                self.problem += e_grid_imp <= self.variables['p_imp_peak'] * self.time_series.dt[t] / 3600
 
         # if demand rate is applied, the maximum grid import power value
         # of all time steps drives the demand rate charge
