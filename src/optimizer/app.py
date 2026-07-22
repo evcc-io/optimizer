@@ -5,7 +5,7 @@ from flask import Flask, jsonify, request
 from flask_restx import Api, Resource, fields
 from werkzeug.exceptions import BadRequest
 
-from .charging_profiles import get_profile, CHEMISTRY_PROFILES
+from .charging_profiles import get_profile
 from .optimizer import BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
 
 app = Flask(__name__)
@@ -82,8 +82,8 @@ battery_config_model = api.model('BatteryConfig', {
     'd_max': fields.Float(required=True, description='Maximum discharge power (W)'),
     'p_a': fields.Float(required=True, description='Monetary value per Wh at end of the optimization horizon'),
     'c_priority': fields.Integer(required=False, description='Charging and discharging priority compared to other batteries. 2 = highest priority.'),
-    'charge_profile': fields.String(required=False, description='Named charge profile for SoC-dependent charge power limiting (CC-CV taper). Enables iterative constraint tightening in the MILP solver. Individual parameters can be overridden with charge_knee, charge_k, charge_c_rate_float.'),
-    'charge_knee': fields.Float(required=False, description='SoC (%) where CC-CV taper begins. With charge_profile: overrides the profile value. Without: requires charge_k to build a custom profile.'),
+    'charge_profile': fields.String(required=False, description='Named CC-CV taper profile (e.g. lifepo4_conservative).'),
+    'charge_knee': fields.Float(required=False, description='SoC% where taper begins. Overrides profile default.'),
     'charge_k': fields.Float(required=False, description='Exponential decay constant for the CC-CV taper curve.'),
     'charge_c_rate_float': fields.Float(required=False, description='Minimum C-rate at float / tail end of charging (default 0.01).'),
 })
