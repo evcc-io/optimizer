@@ -5,7 +5,7 @@ from flask import Flask, jsonify, request
 from flask_restx import Api, Resource, fields
 from werkzeug.exceptions import BadRequest
 
-from .charging_profiles import get_profile
+from .charging_profiles import find_optimal_level, get_profile
 from .optimizer import BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
 
 app = Flask(__name__)
@@ -128,6 +128,54 @@ optimization_result_model = api.model('OptimizationResult', {
     'grid_import_overshoot': fields.List(fields.Float, description='Energy above the power limit imported from grid at each time step (Wh)'),
     'grid_export_overshoot': fields.List(fields.Float, description='Energy not exported due to hitting the grid export power limit at each time step (Wh)')
 })
+
+
+def _level_to_milp_format(level_result, capacity_wh, dt_seconds):
+    """Convert level algorithm output to MILP-compatible response format.
+
+    Maps the level schedule (per-slot watts + SoC%) into the same structure
+    the MILP endpoint returns (per-slot Wh + SoC in Wh absolute), so
+    consumers can process both endpoints with identical code.
+    """
+    schedule = level_result.get('schedule', [])
+    dt_hours = dt_seconds / 3600.0
+
+    charging_power = []
+    discharging_power = []
+    state_of_charge = []
+    grid_export = []
+    grid_import = []
+    flow_direction = []
+
+    for slot in schedule:
+        charge_wh = slot['charge_w'] * dt_hours
+        export_wh = slot['export_w'] * dt_hours
+
+        charging_power.append(round(charge_wh, 2))
+        discharging_power.append(0.0)
+        state_of_charge.append(round(slot['soc'] / 100.0 * capacity_wh, 1))
+        grid_export.append(round(export_wh, 2))
+        grid_import.append(0.0)
+        flow_direction.append(1 if export_wh > 0 else 0)
+
+    return {
+        'status': level_result.get('status', 'Optimal'),
+        'objective_value': 0.0,
+        'limit_violations': {
+            'grid_import_limit_exceeded': False,
+            'grid_export_limit_hit': False,
+        },
+        'batteries': [{
+            'charging_power': charging_power,
+            'discharging_power': discharging_power,
+            'state_of_charge': state_of_charge,
+        }],
+        'grid_import': grid_import,
+        'grid_export': grid_export,
+        'flow_direction': flow_direction,
+        'grid_import_overshoot': [],
+        'grid_export_overshoot': [],
+    }
 
 
 @ns.route('/charge-schedule')
@@ -254,6 +302,107 @@ class OptimizeCharging(Resource):
 
         except Exception as e:
             api.abort(500, f"Optimization failed: {str(e)}")
+
+
+# Input model for level schedule
+level_input_model = api.model('LevelInput', {
+    'charge_profile': fields.String(required=False, description='Named CC-CV taper profile.'),
+    'charge_knee': fields.Float(required=False, description='SoC% where taper begins.'),
+    'charge_k': fields.Float(required=False, description='Exponential decay constant.'),
+    'charge_c_rate_float': fields.Float(required=False, description='Minimum C-rate at float.'),
+    'capacity_wh': fields.Float(required=True, description='Battery capacity in Wh'),
+    'soc_start': fields.Float(required=True, description='Starting SoC (0-100)'),
+    'soc_target': fields.Float(required=True, description='Target SoC (0-100)'),
+    'solar_w': fields.List(fields.Float, required=True, description='Solar power per slot (W)'),
+    'consumption_w': fields.Float(required=False, default=800, description='Consumption (W)'),
+    'dt_seconds': fields.Float(required=False, default=900, description='Slot duration (s)'),
+})
+
+
+@ns.route('/level-schedule')
+class OptimizeLevel(Resource):
+    @api.expect(level_input_model, validate=True)
+    @api.marshal_with(optimization_result_model)
+    def post(self):
+        """
+        Compute an optimal charge schedule using the Level algorithm.
+
+        Finds the flat export ceiling that charges the battery from soc_start
+        to soc_target using solar surplus, while minimizing peak grid export.
+        Respects the CC-CV taper profile for SoC-dependent charge power limits.
+
+        Returns the same format as /optimize/charge-schedule so consumers can
+        process both endpoints with identical code.
+        """
+        try:
+            data = api.payload
+
+            # Build profile
+            profile = None
+            profile_name = data.get('charge_profile')
+            charge_knee = data.get('charge_knee')
+            charge_k = data.get('charge_k')
+            charge_c_rate_float = data.get('charge_c_rate_float')
+            capacity_wh = data['capacity_wh']
+
+            if profile_name:
+                overrides = {}
+                if charge_knee is not None:
+                    overrides['knee'] = charge_knee
+                if charge_k is not None:
+                    overrides['k'] = charge_k
+                if charge_c_rate_float is not None:
+                    overrides['c_rate_float'] = charge_c_rate_float
+                profile = get_profile(profile_name, **overrides)
+            elif charge_knee is not None and charge_k is not None:
+                profile = {
+                    'c_rate_max': 0.25,
+                    'knee': charge_knee,
+                    'k': charge_k,
+                    'c_rate_float': charge_c_rate_float or 0.01,
+                }
+            else:
+                profile = get_profile('lifepo4_conservative')
+
+            dt_seconds = data.get('dt_seconds', 900)
+
+            result = find_optimal_level(
+                profile=profile,
+                capacity_wh=capacity_wh,
+                soc_start=data['soc_start'],
+                soc_target=data['soc_target'],
+                solar_w=data['solar_w'],
+                consumption_w=data.get('consumption_w', 800),
+                dt_seconds=dt_seconds,
+            )
+
+            if result is None:
+                return {
+                    'status': 'Optimal',
+                    'objective_value': 0.0,
+                    'limit_violations': {
+                        'grid_import_limit_exceeded': False,
+                        'grid_export_limit_hit': False,
+                    },
+                    'batteries': [{
+                        'charging_power': [],
+                        'discharging_power': [],
+                        'state_of_charge': [],
+                    }],
+                    'grid_import': [],
+                    'grid_export': [],
+                    'flow_direction': [],
+                    'grid_import_overshoot': [],
+                    'grid_export_overshoot': [],
+                }
+
+            result['status'] = 'Optimal'
+            return _level_to_milp_format(result, capacity_wh, dt_seconds)
+
+        except ValueError as e:
+            api.abort(400, str(e))
+        except Exception as e:
+            api.abort(500, f"Level optimization failed: {str(e)}")
 
 
 @ns.route('/health')

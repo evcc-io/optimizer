@@ -125,6 +125,53 @@ paths:
               example:
                 message: "Optimization failed: Infeasible problem"
 
+  /optimize/level-schedule:
+    post:
+      tags:
+        - optimization
+      summary: Optimize battery charging using the Level algorithm
+      description: |
+        Finds the optimal flat export ceiling that charges a battery from
+        soc_start to soc_target using solar surplus, while minimizing peak
+        grid export. Respects CC-CV taper profiles for SoC-dependent charge
+        power limits.
+
+        Returns the same response format as /optimize/charge-schedule so
+        consumers can process both endpoints with identical code.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LevelInput"
+            example:
+              charge_profile: lifepo4_conservative
+              capacity_wh: 42500
+              soc_start: 60
+              soc_target: 95
+              solar_w: [0, 0, 200, 500, 1000, 1800, 2800, 4000, 5500, 7000, 8500, 9500, 10000, 10200, 10000, 9500, 8500, 7000, 5500, 4000, 2800, 1800, 1000, 500]
+              consumption_w: 800
+              dt_seconds: 900
+      responses:
+        "200":
+          description: Optimization completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OptimizationResult"
+        "400":
+          description: Bad request - Invalid input data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error - Optimization failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /optimize/health:
     get:
       tags:
@@ -347,6 +394,68 @@ components:
             minimum: 0
           description: Grid export remuneration per Wh at each time step (currency units/Wh)
           example: [0.15, 0.12, 0.10, 0.11, 0.14, 0.16]
+
+    LevelInput:
+      type: object
+      required:
+        - capacity_wh
+        - soc_start
+        - soc_target
+        - solar_w
+      properties:
+        charge_profile:
+          type: string
+          description: Named CC-CV taper profile (e.g. lifepo4_conservative).
+          example: lifepo4_conservative
+        charge_knee:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: SoC% where taper begins. Overrides profile default.
+        charge_k:
+          type: number
+          minimum: 0
+          description: Exponential decay constant for the taper curve.
+        charge_c_rate_float:
+          type: number
+          minimum: 0
+          description: Minimum C-rate at float (default 0.01).
+        capacity_wh:
+          type: number
+          minimum: 0
+          description: Battery capacity in Wh
+          example: 42500
+        soc_start:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: Starting state of charge (0-100)
+          example: 60
+        soc_target:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: Target state of charge (0-100)
+          example: 95
+        solar_w:
+          type: array
+          items:
+            type: number
+            minimum: 0
+          description: Solar power forecast per time slot (watts)
+          example: [0, 500, 1000, 2000, 4000, 6000, 8000, 6000, 4000, 2000]
+        consumption_w:
+          type: number
+          minimum: 0
+          default: 800
+          description: Household consumption in watts
+          example: 800
+        dt_seconds:
+          type: number
+          minimum: 0
+          default: 900
+          description: Slot duration in seconds
+          example: 900
 
     OptimizationInput:
       type: object

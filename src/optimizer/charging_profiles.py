@@ -130,3 +130,144 @@ def max_charge_power(profile, capacity_wh, soc_percent):
         c_rate = max(c_rate_float, c_rate_max * math.exp(-k * (soc_percent - knee)))
 
     return capacity_wh * c_rate
+
+
+# ---------------------------------------------------------------------------
+# Level algorithm
+# ---------------------------------------------------------------------------
+
+
+def find_optimal_level(
+    profile,
+    capacity_wh,
+    soc_start,
+    soc_target,
+    solar_w,
+    consumption_w=800,
+    dt_seconds=900,
+):
+    """
+    Find the optimal flat export level that charges the battery to
+    target SoC while minimizing the peak grid export.
+
+    Instead of sliding a fixed charge block, this algorithm finds the
+    horizontal line (export ceiling) such that charging with the surplus
+    above this line fills the battery exactly to the target SoC.
+
+    In each slot, the charge power is:
+        min(PV - consumption - level, profile_max(SoC))
+
+    This allows variable charge power per slot: slow charging at the
+    edges of the solar bell curve, faster in the middle -- but always
+    limited by the SoC-dependent profile.
+
+    The result is a flatter export curve compared to the fixed-block
+    approach, because the battery absorbs more during peak hours
+    (when SoC is still low) instead of ramping up early.
+
+    Args:
+        profile: Charging profile dict (c_rate_max, knee, k, c_rate_float)
+        capacity_wh: Battery capacity in Wh
+        soc_start: Starting SoC (0-100)
+        soc_target: Target SoC (0-100)
+        solar_w: List of solar power values per slot (watts)
+        consumption_w: Household consumption in watts (default: 800)
+        dt_seconds: Slot duration in seconds (default: 900)
+
+    Returns:
+        dict with schedule and metadata, or None if target unreachable.
+        Keys: n_slots, peak_export_w, peak_without_charge_w,
+              total_charged_kwh, export_level_w, schedule
+        schedule entries: {solar_w, charge_w, export_w, soc}
+    """
+    if soc_start >= soc_target:
+        return None
+
+    n_solar = len(solar_w)
+    if n_solar == 0:
+        return None
+
+    dt_h = dt_seconds / 3600.0
+    energy_needed_wh = capacity_wh * (soc_target - soc_start) / 100
+
+    # Peak export without any charging
+    peak_without = max(max(0, s - consumption_w) for s in solar_w)
+
+    # Find the target peak that minimizes the actual peak export.
+    # The relationship between target peak and actual peak is not
+    # monotonic: too aggressive (low target) fills the battery early,
+    # leaving peak solar slots unprotected. Too conservative (high
+    # target) doesn't charge enough. We sweep through candidates
+    # and simulate each one to find the true minimum.
+    n_steps = 200
+    best_target = peak_without
+    best_actual_peak = peak_without
+
+    for step in range(n_steps + 1):
+        candidate = peak_without * step / n_steps
+
+        # Simulate charging with this target
+        soc = soc_start
+        charged_wh = 0
+        actual_peak = 0
+        for i in range(n_solar):
+            surplus = max(0, solar_w[i] - consumption_w)
+            available = max(0, surplus - candidate)
+            p_max = max_charge_power(profile, capacity_wh, soc)
+            charge_w = min(available, p_max)
+            energy_wh = charge_w * dt_h
+            charged_wh += energy_wh
+            soc += energy_wh / capacity_wh * 100
+            soc = min(soc, soc_target)
+            export_w = max(0, surplus - charge_w)
+            actual_peak = max(actual_peak, export_w)
+
+        # Only consider if enough energy is charged
+        if charged_wh >= energy_needed_wh * 0.99:
+            if actual_peak < best_actual_peak:
+                best_actual_peak = actual_peak
+                best_target = candidate
+
+    target_peak = best_target
+
+    # Final simulation at the found target peak
+    soc = soc_start
+    total_charged_wh = 0
+    schedule = []
+    peak_export = 0
+
+    for i in range(n_solar):
+        surplus = max(0, solar_w[i] - consumption_w)
+        available = max(0, surplus - target_peak)
+        p_max = max_charge_power(profile, capacity_wh, soc)
+        charge_w = min(available, p_max)
+        remaining_wh = capacity_wh * (soc_target - soc) / 100
+        if charge_w * dt_h > remaining_wh:
+            charge_w = remaining_wh / dt_h
+        energy_wh = charge_w * dt_h
+        total_charged_wh += energy_wh
+        soc += energy_wh / capacity_wh * 100
+        soc = min(soc, soc_target)
+
+        export_w = max(0, surplus - charge_w)
+        peak_export = max(peak_export, export_w)
+
+        schedule.append({
+            "solar_w": solar_w[i],
+            "charge_w": charge_w,
+            "export_w": export_w,
+            "soc": soc,
+        })
+
+    n_charge_slots = sum(1 for s in schedule if s["charge_w"] > 0)
+    if n_charge_slots == 0:
+        return None
+
+    return {
+        "n_slots": n_charge_slots,
+        "peak_export_w": peak_export,
+        "peak_without_charge_w": peak_without,
+        "total_charged_kwh": total_charged_wh / 1000,
+        "export_level_w": target_peak,
+        "schedule": schedule,
+    }
