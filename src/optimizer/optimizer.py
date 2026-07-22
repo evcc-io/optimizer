@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pulp
 
+from .charging_profiles import max_charge_power
 from .settings import OptimizerSettings
 
 
@@ -36,6 +37,7 @@ class BatteryConfig:
     p_demand: Optional[List[float]] = None  # Minimum charge demand (Wh)
     s_goal: Optional[List[float]] = None  # Goal state of charge (Wh)
     c_priority: int = 0
+    charge_profile: Optional[dict] = None  # CC-CV taper profile (charging_profiles format)
 
 
 @dataclass
@@ -491,10 +493,75 @@ class Optimizer:
                 # Charge constraint
                 self.problem += self.variables['c'][i][t] <= self.M * (1 - self.variables['z_cd'][i][t])
 
+    def _has_charge_profiles(self) -> bool:
+        """True if any battery has a CC-CV taper profile."""
+        return any(bat.charge_profile is not None for bat in self.batteries)
+
+    def _soc_percent(self, bat_index: int, soc_wh: float) -> float:
+        """Convert SoC from Wh to percent for a battery."""
+        cap = self.batteries[bat_index].s_capacity
+        if cap <= 0:
+            return 0.0
+        return (soc_wh / cap) * 100.0
+
+    def _add_taper_constraints(self, iteration: int) -> int:
+        """Read SoC trajectory from current solution and inject per-slot
+        charge power upper bounds from the taper profile.
+
+        Returns the number of binding constraints added.
+        """
+        n_added = 0
+        for i, bat in enumerate(self.batteries):
+            if bat.charge_profile is None:
+                continue
+            for t in self.time_steps:
+                soc_wh = pulp.value(self.variables['s'][i][t])
+                if soc_wh is None:
+                    continue
+                soc_pct = self._soc_percent(i, soc_wh)
+                p_limit = max_charge_power(bat.charge_profile, bat.s_capacity, soc_pct)
+                e_limit = p_limit * self.time_series.dt[t] / 3600.0
+                e_full = bat.c_max * self.time_series.dt[t] / 3600.0
+                if e_limit < e_full - 1.0:  # 1 Wh tolerance
+                    self.problem += (
+                        self.variables['c'][i][t] <= e_limit,
+                        f"taper_{i}_{t}_iter{iteration}",
+                    )
+                    n_added += 1
+        return n_added
+
+    def _soc_trajectory(self) -> Dict[int, List[float]]:
+        """Extract SoC trajectory (Wh) per battery from current solution."""
+        result = {}
+        for i in range(len(self.batteries)):
+            result[i] = [
+                pulp.value(self.variables['s'][i][t])
+                for t in self.time_steps
+            ]
+        return result
+
+    @staticmethod
+    def _trajectory_converged(prev, curr, tol_wh=50.0):
+        """Check whether SoC trajectories converged between iterations."""
+        for i in prev:
+            for t in range(len(prev[i])):
+                p = prev[i][t]
+                c = curr[i][t]
+                if p is None or c is None:
+                    continue
+                if abs(p - c) > tol_wh:
+                    return False
+        return True
+
     def solve(self) -> Dict:
         """
         Creates the MILP model if none exists and solves the optimization problem.
-        Returns a dictionary with the optimization results
+
+        When batteries have a charge_profile (CC-CV taper), iterative constraint
+        tightening is used: solve, extract SoC trajectory, compute per-slot
+        P_max(SoC), add constraints, re-solve until convergence.
+
+        Returns a dictionary with the optimization results.
         """
 
         if self.problem is None:
@@ -506,9 +573,25 @@ class Optimizer:
             threads=self.settings.num_threads,
             timeLimit=self.settings.time_limit,
         )
+        max_taper_iterations = 5
         with TemporaryDirectory() as tmpdir:
             solver.tmpDir = tmpdir
             self.problem.solve(solver)
+
+            # Iterative tightening for SoC-dependent charge limits
+            if self._has_charge_profiles() and pulp.LpStatus[self.problem.status] == 'Optimal':
+                prev_trajectory = self._soc_trajectory()
+                for iteration in range(1, max_taper_iterations + 1):
+                    n_added = self._add_taper_constraints(iteration)
+                    if n_added == 0:
+                        break
+                    self.problem.solve(solver)
+                    if pulp.LpStatus[self.problem.status] != 'Optimal':
+                        break
+                    curr_trajectory = self._soc_trajectory()
+                    if self._trajectory_converged(prev_trajectory, curr_trajectory):
+                        break
+                    prev_trajectory = curr_trajectory
 
         # Extract results
         status = pulp.LpStatus[self.problem.status]
