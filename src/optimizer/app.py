@@ -5,7 +5,7 @@ from flask import Flask, jsonify, request
 from flask_restx import Api, Resource, fields
 from werkzeug.exceptions import BadRequest
 
-from .optimizer import BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
+from .optimizer import BatteryConfig, GridConfig, HeatingConfig, OptimizationStrategy, Optimizer, TimeSeriesData, fit_heating_model
 
 app = Flask(__name__)
 
@@ -83,6 +83,26 @@ battery_config_model = api.model('BatteryConfig', {
     'c_priority': fields.Integer(required=False, description='Charging and discharging priority compared to other batteries. 2 = highest priority.')
 })
 
+heating_config_model = api.model('HeatingConfig', {
+    'temp_min': fields.Float(required=True, description='Lower comfort temperature bound (°C)'),
+    'temp_max': fields.Float(required=True, description='Upper comfort temperature bound (°C)'),
+    'temp_initial': fields.Float(required=True, description='Current temperature (°C)'),
+    'c_max': fields.Float(required=True, description='Maximum heating power (W)'),
+    'history_temp': fields.List(fields.Float, required=True, description='Historic temperatures in 15-minute slots (°C)'),
+    'history_energy': fields.List(fields.Float, required=True, description='Historic energy consumed by the heating device in 15-minute slots (Wh)'),
+})
+
+heating_history_model = api.model('HeatingHistory', {
+    'history_temp': fields.List(fields.Float, required=True, description='Historic temperatures in 15-minute slots (°C)'),
+    'history_energy': fields.List(fields.Float, required=True, description='Historic energy consumed by the heating device in 15-minute slots (Wh)'),
+})
+
+heating_parameters_model = api.model('HeatingParameters', {
+    'alpha': fields.Float(description='Temperature change per °C per 15-minute slot (loss rate, < 0)'),
+    'beta': fields.Float(description='Temperature gain per consumed Wh (°C/Wh)'),
+    'gamma': fields.Float(description='Constant temperature drift per 15-minute slot (°C), absorbs ambient conditions'),
+})
+
 time_series_model = api.model('TimeSeries', {
     'dt': fields.List(fields.Float, required=True, description='duration in seconds for each time step (s)'),
     'gt': fields.List(fields.Float, required=True, description='Required energy for home consumption at each time step (Wh)'),
@@ -95,6 +115,7 @@ optimization_input_model = api.model('OptimizationInput', {
     'strategy': fields.Nested(strategy_model, required=False, description='Optimization strategy'),
     'grid': fields.Nested(grid_model, required=False, description='Grid import and export configuration'),
     'batteries': fields.List(fields.Nested(battery_config_model), required=True, description='Battery configurations'),
+    'heating': fields.List(fields.Nested(heating_config_model), required=False, description='Heating devices (leaky thermal stores fitted from history)'),
     'time_series': fields.Nested(time_series_model, required=True, description='Time series data'),
     'eta_c': fields.Float(required=False, default=0.95, description='Charging efficiency'),
     'eta_d': fields.Float(required=False, default=0.95, description='Discharging efficiency'),
@@ -107,6 +128,11 @@ battery_result_model = api.model('BatteryResult', {
     'state_of_charge': fields.List(fields.Float, description='State of charge at each time step (Wh)')
 })
 
+heating_result_model = api.model('HeatingResult', {
+    'heating_energy': fields.List(fields.Float, description='Optimal heating energy input at each time step (Wh)'),
+    'temperature': fields.List(fields.Float, description='Predicted temperature at each time step (°C)')
+})
+
 limit_violation_result_model = api.model('LimitViolationResult', {
     'grid_import_limit_exceeded': fields.Boolean(description='The energy demand could only be satisfied by violating the grid import limit.'),
     'grid_export_limit_hit': fields.Boolean(description='The solar yield was reduced due to the limitation of grid export power.')
@@ -117,6 +143,7 @@ optimization_result_model = api.model('OptimizationResult', {
     'objective_value': fields.Float(description='Optimal objective function value'),
     'limit_violations': fields.Nested(limit_violation_result_model, description='Collection of flags signalling the violation of defined limits'),
     'batteries': fields.List(fields.Nested(battery_result_model), description='Battery optimization results'),
+    'heating': fields.List(fields.Nested(heating_result_model), description='Heating device optimization results'),
     'grid_import': fields.List(fields.Float, description='Energy imported from grid at each time step (Wh)'),
     'grid_export': fields.List(fields.Float, description='Energy exported to grid at each time step (Wh)'),
     'flow_direction': fields.List(fields.Integer, description='Binary flow direction (1=export, 0=import)'),
@@ -173,6 +200,21 @@ class OptimizeCharging(Resource):
                     c_priority=bat_data.get('c_priority', 0),
                 ))
 
+            # Parse heating device configurations; thermal model coefficients are
+            # fitted from the supplied 15-minute history
+            heating = []
+            for heat_data in data.get('heating') or []:
+                alpha, beta, gamma = fit_heating_model(heat_data['history_temp'], heat_data['history_energy'])
+                heating.append(HeatingConfig(
+                    temp_min=heat_data['temp_min'],
+                    temp_max=heat_data['temp_max'],
+                    temp_initial=heat_data['temp_initial'],
+                    c_max=heat_data['c_max'],
+                    alpha=alpha,
+                    beta=beta,
+                    gamma=gamma,
+                ))
+
             # Parse time series data
             time_series = TimeSeriesData(
                 dt=data['time_series']['dt'],
@@ -211,7 +253,8 @@ class OptimizeCharging(Resource):
                 time_series=time_series,
                 eta_c=data.get('eta_c', 0.95),
                 eta_d=data.get('eta_d', 0.95),
-                M=1e6
+                M=1e6,
+                heating=heating
             )
 
             result = optimizer.solve()
@@ -219,6 +262,28 @@ class OptimizeCharging(Resource):
 
         except Exception as e:
             api.abort(500, f"Optimization failed: {str(e)}")
+
+
+@ns.route('/heating-parameters')
+class FitHeatingParameters(Resource):
+    @api.expect(heating_history_model, validate=True)
+    @api.marshal_with(heating_parameters_model)
+    def post(self):
+        """
+        Fit heating device thermal model parameters from history
+
+        Fits the leaky thermal store model dT = alpha*T + beta*E + gamma by
+        least squares from 15-minute history slots of temperature and consumed
+        energy. The same fit runs implicitly inside the charge-schedule
+        optimization; this endpoint exposes it for inspection and validation.
+        """
+        try:
+            alpha, beta, gamma = fit_heating_model(
+                api.payload['history_temp'], api.payload['history_energy'])
+        except ValueError as e:
+            api.abort(400, str(e))
+
+        return {'alpha': alpha, 'beta': beta, 'gamma': gamma}
 
 
 @ns.route('/health')

@@ -125,6 +125,46 @@ paths:
               example:
                 message: "Optimization failed: Infeasible problem"
 
+  /optimize/heating-parameters:
+    post:
+      tags:
+        - optimization
+      summary: Fit heating device thermal model parameters from history
+      description: |
+        Fits the leaky thermal store model dT = alpha*T + beta*E + gamma by
+        least squares from 15-minute history slots of temperature and consumed
+        energy. The same fit runs implicitly inside the charge-schedule
+        optimization when heating devices are supplied; this endpoint exposes
+        it separately for inspection and validation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HeatingHistory"
+            example:
+              history_temp: [51.2, 51.8, 52.5, 52.1, 51.6, 51.2]
+              history_energy: [400, 420, 150, 0, 0, 80]
+      responses:
+        "200":
+          description: Thermal model fitted successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HeatingParameters"
+              example:
+                alpha: -0.02
+                beta: 0.004
+                gamma: 0.3
+        "400":
+          description: Bad request - history too short or shows no heating effect
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                message: "heating history too short to fit thermal model"
+
   /optimize/health:
     get:
       tags:
@@ -272,6 +312,86 @@ components:
           default: 0
           description: Charging and discharging priority 0..2 compared to other batteries. 2 = highest priority.
 
+    HeatingConfig:
+      type: object
+      required:
+        - temp_min
+        - temp_max
+        - temp_initial
+        - c_max
+        - history_temp
+        - history_energy
+      properties:
+        temp_min:
+          type: number
+          description: Lower comfort temperature bound (°C)
+          example: 45
+        temp_max:
+          type: number
+          description: Upper comfort temperature bound (°C)
+          example: 60
+        temp_initial:
+          type: number
+          description: Current temperature (°C)
+          example: 52
+        c_max:
+          type: number
+          minimum: 0
+          description: Maximum heating power (W)
+          example: 3000
+        history_temp:
+          type: array
+          items:
+            type: number
+          description: |
+            Historic device temperatures in 15-minute slots (°C). Together with
+            history_energy this is used to fit the leaky thermal model
+            dT = alpha*T + beta*E + gamma per slot by least squares.
+          example: [51.2, 51.8, 52.5, 52.1, 51.6, 51.2]
+        history_energy:
+          type: array
+          items:
+            type: number
+            minimum: 0
+          description: Historic energy consumed by the heating device in 15-minute slots (Wh)
+          example: [400, 420, 150, 0, 0, 80]
+
+    HeatingHistory:
+      type: object
+      required:
+        - history_temp
+        - history_energy
+      properties:
+        history_temp:
+          type: array
+          items:
+            type: number
+          description: Historic device temperatures in 15-minute slots (°C)
+          example: [51.2, 51.8, 52.5, 52.1, 51.6, 51.2]
+        history_energy:
+          type: array
+          items:
+            type: number
+            minimum: 0
+          description: Historic energy consumed by the heating device in 15-minute slots (Wh)
+          example: [400, 420, 150, 0, 0, 80]
+
+    HeatingParameters:
+      type: object
+      properties:
+        alpha:
+          type: number
+          description: Temperature change per °C per 15-minute slot (loss rate, < 0)
+          example: -0.02
+        beta:
+          type: number
+          description: Temperature gain per consumed Wh (°C/Wh)
+          example: 0.004
+        gamma:
+          type: number
+          description: Constant temperature drift per 15-minute slot (°C), absorbs ambient conditions
+          example: 0.3
+
     TimeSeries:
       type: object
       required:
@@ -337,6 +457,15 @@ components:
             $ref: "#/components/schemas/BatteryConfig"
           minItems: 1
           description: Configuration for all batteries in the system
+        heating:
+          type: array
+          items:
+            $ref: "#/components/schemas/HeatingConfig"
+          description: |
+            Optional heating devices. Unlike batteries these are leaky thermal
+            stores: they lose energy proportionally to their temperature and
+            cannot feed energy back. Model parameters are fitted from the
+            supplied 15-minute history.
         time_series:
           $ref: "#/components/schemas/TimeSeries"
         eta_c:
@@ -379,6 +508,23 @@ components:
           description: State of charge at each time step (Wh)
           example: [21650, 19650, 16650, 14150, 12650, 11650]
 
+    HeatingResult:
+      type: object
+      properties:
+        heating_energy:
+          type: array
+          items:
+            type: number
+            minimum: 0
+          description: Optimal heating energy input at each time step (Wh)
+          example: [750, 750, 0, 0, 0, 400]
+        temperature:
+          type: array
+          items:
+            type: number
+          description: Predicted temperature at each time step (°C)
+          example: [54.6, 57.2, 56.1, 55.0, 54.0, 54.5]
+
     LimitViolationResult:
       type: object
       properties:
@@ -417,6 +563,11 @@ components:
           items:
             $ref: "#/components/schemas/BatteryResult"
           description: Optimization results for each battery
+        heating:
+          type: array
+          items:
+            $ref: "#/components/schemas/HeatingResult"
+          description: Optimization results for each heating device
         grid_import:
           type: array
           items:
