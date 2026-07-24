@@ -1,0 +1,160 @@
+{
+    "strict": true,
+    "request": {
+        "strategy": {
+            "charging_strategy": "attenuate_grid_peaks"
+        },
+        "batteries": [
+            {
+                "charge_from_grid": true,
+                "discharge_to_grid": false,
+                "s_capacity": 20000,
+                "s_min": 0,
+                "s_max": 20000,
+                "s_initial": 0,
+                "s_goal": [
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    12000
+                ],
+                "c_min": 0,
+                "c_max": 2000,
+                "d_max": 0,
+                "p_a": 0
+            }
+        ],
+        "time_series": {
+            "dt": [
+                3600,
+                3600,
+                3600,
+                3600,
+                3600,
+                3600,
+                3600,
+                3600
+            ],
+            "gt": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+            ],
+            "ft": [
+                0,
+                0,
+                0,
+                3000,
+                6000,
+                6000,
+                3000,
+                0
+            ],
+            "p_N": [
+                0.3,
+                0.3,
+                0.3,
+                0.3,
+                0.3,
+                0.3,
+                0.3,
+                0.3
+            ],
+            "p_E": [
+                0.1,
+                0.1,
+                0.1,
+                0.1,
+                0.1,
+                0.1,
+                0.1,
+                0.1
+            ]
+        },
+        "eta_c": 0.95,
+        "eta_d": 0.95
+    },
+    "expected_response": {
+        "status": "Optimal",
+        "objective_value": -389.47363999999993,
+        "limit_violations": {
+            "grid_import_limit_exceeded": false,
+            "grid_export_limit_hit": false
+        },
+        "batteries": [
+            {
+                "charging_power": [
+                    1157.8947,
+                    1157.8947,
+                    1157.8947,
+                    2000.0,
+                    2000.0,
+                    2000.0,
+                    2000.0,
+                    1157.8947
+                ],
+                "discharging_power": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "state_of_charge": [
+                    1100.0,
+                    2200.0,
+                    3300.0,
+                    5200.0,
+                    7100.0,
+                    9000.0,
+                    10900.0,
+                    12000.0
+                ]
+            }
+        ],
+        "grid_import": [
+            1157.8947,
+            1157.8947,
+            1157.8947,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1157.8947
+        ],
+        "grid_export": [
+            0.0,
+            0.0,
+            0.0,
+            1000.0,
+            4000.0,
+            4000.0,
+            1000.0,
+            0.0
+        ],
+        "flow_direction": [
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0
+        ],
+        "grid_import_overshoot": [],
+        "grid_export_overshoot": []
+    }
+}

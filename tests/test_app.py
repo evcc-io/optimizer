@@ -34,6 +34,17 @@ def test_optimizer(test_case: pathlib.Path):
                              expected_objective_value,
                              rtol=1e-05, atol=1e-08, equal_nan=False), \
             f"objective value: {actual_objective_value}, expected was: {expected_objective_value}"
+    # cases marked strict also compare the schedule itself. needed where the feature under
+    # test only picks between cost neutral alternatives, which the objective value hides
+    if test_data.get("strict"):
+        for key in ("grid_import", "grid_export"):
+            assert numpy.allclose(response.json[key], expected_response[key], atol=1), \
+                f"{key}: {response.json[key]}, expected was: {expected_response[key]}"
+        for i, battery in enumerate(expected_response["batteries"]):
+            for key in ("charging_power", "discharging_power"):
+                actual = response.json["batteries"][i][key]
+                assert numpy.allclose(actual, battery[key], atol=1), \
+                    f"battery {i} {key}: {actual}, expected was: {battery[key]}"
 
 
 def test_abort_returns_json_message():
