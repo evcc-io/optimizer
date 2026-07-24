@@ -22,9 +22,12 @@ PEAK_STRATEGY_SIDES = {
     'attenuate_grid_peaks': ('imp', 'exp'),
 }
 
-# factor the objective is scaled by before handing the model to the solver, see
-# _setup_target_function(). Argmax neutral, it only moves the coefficients away from the
-# solver's absolute tolerances.
+# factor the assembled objective is multiplied by before the model goes to the solver. CBC judges
+# improvements against absolute tolerances (~1e-7), and with prices given per Wh the raw objective
+# coefficients land close to that bound, so real improvements get pruned as numerical noise.
+# Scaling does not change the argmax, it only lifts the coefficients into a range the solver can
+# resolve. The reported objective value is recalculated from the solution and stays in its
+# original unit.
 OBJECTIVE_SCALE = 1e6
 
 # grid energy variable and limit exceedance variable per leveled side
@@ -367,12 +370,6 @@ class Optimizer:
                 objective += self.variables['c'][i][t] * self.min_import_price * 5e-5 * (self.T - t) * bat.c_priority
                 objective += self.variables['d'][i][t] * self.min_import_price * 5e-5 * (self.T - t) * bat.c_priority
 
-        # CBC judges improvements against absolute tolerances (~1e-7). Prices are given in
-        # currency per Wh, so the raw coefficients of the objective land close to that bound and
-        # real improvements get pruned as numerical noise. Scaling the whole objective does not
-        # change its argmax but lifts the coefficients into a range the solver can resolve, which
-        # both speeds up the search and avoids stopping on a suboptimal solution. The reported
-        # objective value is recalculated from the solution, so it stays in the original unit.
         self.problem += objective * OBJECTIVE_SCALE
 
     def _add_energy_balance_constraints(self):
