@@ -111,6 +111,12 @@ class Optimizer:
         # solar power
         self.prc_e_grid_exp_pen = self.penalty_base * 10e1
 
+        # weights of the grid peak leveling strategies. capping the horizon maximum alone leaves the
+        # profile below the cap arbitrary, so the step to step ramp is penalized as well. The ramp
+        # weight is the smaller one, so lowering the peak wins wherever the two disagree.
+        self.prc_p_peak = self.penalty_base * 1e-3
+        self.prc_p_ramp = self.penalty_base * 1e-5
+
         # if there is a demand rate given in the input, the grid import limit will be interpreted as the
         # threshold beyond wich the demand rate is to be applied. Compute a demand rate flag for use in the
         # build constraint and build objective methods.
@@ -210,9 +216,14 @@ class Optimizer:
         if self.is_grid_demand_rate_active:
             self.variables['p_max_imp_exc'] = pulp.LpVariable("p_max_imp_exc", lowBound=0)
 
-        # highest grid power over the whole horizon (W) per side, used by the peak attenuation strategies
+        # highest grid power over the whole horizon (W) and step to step ramp of the grid power (W)
+        # per side, used by the peak attenuation strategies
         for side in self.peak_sides:
             self.variables[f'p_{side}_peak'] = pulp.LpVariable(f"p_{side}_peak", lowBound=0)
+            self.variables[f'p_{side}_ramp'] = [
+                pulp.LpVariable(f"p_{side}_ramp_{t}", lowBound=0)
+                for t in self.time_steps
+            ]
 
         # Binary variable: power flow direction to / from grid variables
         # these variables
@@ -329,12 +340,14 @@ class Optimizer:
 
         # level the grid profile to unload the public grid from peaks. attenuate_demand_peaks levels
         # grid import, attenuate_feedin_peaks levels grid export, attenuate_grid_peaks levels both.
-        # the penalty sits on the horizon maximum instead of on charge power, so the optimizer spreads
-        # charging at partial power over several time steps rather than running one step at full power.
+        # the penalty sits on the horizon maximum and on the step to step ramp instead of on charge
+        # power, so the optimizer spreads charging at partial power over several time steps rather
+        # than running one step at full power, and keeps the profile below the cap leveled too.
         # penalty_base is used instead of min_import_price because negative market prices would turn
         # this penalty into a reward for peaks.
         for side in self.peak_sides:
-            objective += - self.variables[f'p_{side}_peak'] * self.penalty_base * 1e-3
+            objective += - self.variables[f'p_{side}_peak'] * self.prc_p_peak
+            objective += - pulp.lpSum(self.variables[f'p_{side}_ramp']) * self.prc_p_ramp
 
         # prefer discharging batteries completely before importing from grid
         if self.strategy.discharging_strategy == 'discharge_before_import':
@@ -427,16 +440,25 @@ class Optimizer:
                 self.problem += (self.variables['e_exp_lim_exc'][t]
                                  <= self.M * (1 - self.variables['z_exp_lim'][t]))
 
-        # track the horizon maximum of the total grid power for every side the strategy levels.
-        # the peak includes the portion beyond p_max_imp / p_max_exp, so it stays correct in
-        # demand rate mode and when a limit is violated.
+        # track the horizon maximum and the step to step ramp of the total grid power for every side
+        # the strategy levels. Both include the portion beyond p_max_imp / p_max_exp, so they stay
+        # correct in demand rate mode and when a limit is violated.
         for side in self.peak_sides:
             grid_var, lim_exc_var = PEAK_SIDE_VARIABLES[side]
+            # total grid power of this side per time step (W)
+            p_grid = []
             for t in self.time_steps:
                 e_grid = self.variables[grid_var][t]
                 if lim_exc_var in self.variables:
                     e_grid = e_grid + self.variables[lim_exc_var][t]
-                self.problem += e_grid <= self.variables[f'p_{side}_peak'] * self.time_series.dt[t] / 3600
+                p_grid.append(e_grid * 3600 / self.time_series.dt[t])
+
+            for t in self.time_steps:
+                self.problem += p_grid[t] <= self.variables[f'p_{side}_peak']
+            # ramp magnitude: p_ramp[t] >= |p_grid[t] - p_grid[t-1]|
+            for t in range(1, self.T):
+                self.problem += self.variables[f'p_{side}_ramp'][t] >= p_grid[t] - p_grid[t - 1]
+                self.problem += self.variables[f'p_{side}_ramp'][t] >= p_grid[t - 1] - p_grid[t]
 
         # if demand rate is applied, the maximum grid import power value
         # of all time steps drives the demand rate charge
