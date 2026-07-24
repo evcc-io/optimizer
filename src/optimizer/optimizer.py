@@ -222,12 +222,13 @@ class Optimizer:
             self.variables['p_max_imp_exc'] = pulp.LpVariable("p_max_imp_exc", lowBound=0)
 
         # highest grid power over the whole horizon (W) and step to step ramp of the grid power (W)
-        # per side, used by the peak attenuation strategies
+        # per side, used by the peak attenuation strategies. there is no ramp into the first time
+        # step, so the ramp of step t is held at index t - 1
         for side in self.peak_sides:
             self.variables[f'p_{side}_peak'] = pulp.LpVariable(f"p_{side}_peak", lowBound=0)
             self.variables[f'p_{side}_ramp'] = [
                 pulp.LpVariable(f"p_{side}_ramp_{t}", lowBound=0)
-                for t in self.time_steps
+                for t in range(1, self.T)
             ]
 
         # Binary variable: power flow direction to / from grid variables
@@ -466,10 +467,10 @@ class Optimizer:
 
             for t in self.time_steps:
                 self.problem += p_grid[t] <= self.variables[f'p_{side}_peak']
-            # ramp magnitude: p_ramp[t] >= |p_grid[t] - p_grid[t-1]|
+            # ramp magnitude: p_ramp[t - 1] >= |p_grid[t] - p_grid[t-1]|
             for t in range(1, self.T):
-                self.problem += self.variables[f'p_{side}_ramp'][t] >= p_grid[t] - p_grid[t - 1]
-                self.problem += self.variables[f'p_{side}_ramp'][t] >= p_grid[t - 1] - p_grid[t]
+                self.problem += self.variables[f'p_{side}_ramp'][t - 1] >= p_grid[t] - p_grid[t - 1]
+                self.problem += self.variables[f'p_{side}_ramp'][t - 1] >= p_grid[t - 1] - p_grid[t]
 
         # if demand rate is applied, the maximum grid import power value
         # of all time steps drives the demand rate charge
