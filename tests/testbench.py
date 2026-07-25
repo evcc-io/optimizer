@@ -72,7 +72,10 @@ if action == "update":
     if response.status_code != 200:
         print(f"Request to optimizer returned with status {response.status_code}")
         sys.exit(1)
+    strict = test_case.get('strict', False)
     test_case = {}
+    if strict:
+        test_case['strict'] = strict
     test_case['request'] = request
     test_case['expected_response'] = response.get_json()
     json.dump(test_case, indent=4, fp=open(file_in, "w"))
