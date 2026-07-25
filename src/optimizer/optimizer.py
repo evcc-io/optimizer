@@ -468,6 +468,9 @@ class Optimizer:
                         # deactivate it if s_max is already reached
                         self.problem += (self.variables['c'][i][t] + self.variables['p_demand_pen'][i][t]
                                          >= (1 - self.variables['z_s_max_reached'][i][t]) * p_demand)
+                    else:    
+                        # if there is no p_demand set, make sure z_p_demand is 0 to keep the below c_min constraint effective
+                        self.problem += (self.variables['z_p_demand'][i][t] <= 0)
 
                     if bat.c_min > 0:
                         # set constraints to exclude charging between 0 and c_min if z_p_demand is not 1.
