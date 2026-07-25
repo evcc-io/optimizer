@@ -46,6 +46,24 @@ def test_optimizer(test_case: pathlib.Path):
                 assert numpy.allclose(actual, battery[key], atol=1), \
                     f"battery {i} {key}: {actual}, expected was: {battery[key]}"
 
+    # independent invariant, not a comparison against stored output: with c_min set every step
+    # charges either nothing or at least c_min, except when the battery is essentially full and
+    # only a sub-c_min top-off remains. guards against regressions like #19, where p_demand let
+    # charging slip below c_min far from s_max.
+    if response.json["status"] == "Optimal":
+        dt = request["time_series"]["dt"]
+        for i, battery in enumerate(request["batteries"]):
+            c_min = battery.get("c_min", 0)
+            if not c_min:
+                continue
+            charging = response.json["batteries"][i]["charging_power"]
+            soc = response.json["batteries"][i]["state_of_charge"]
+            for t, charge in enumerate(charging):
+                step = c_min * dt[t] / 3600
+                room = battery["s_max"] - soc[t]
+                assert charge <= 1 or charge >= step - 1 or room <= step + 1, \
+                    f"battery {i} t={t}: charges {charge} below c_min step {step} with {room} Wh room to s_max"
+
 
 def test_abort_returns_json_message():
     # message-only api.abort(400, ...) must return a JSON body, not an empty response
