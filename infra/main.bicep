@@ -94,7 +94,9 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
               name: 'GUNICORN_CMD_ARGS'
               // one worker per vCPU. Oversubscribing a CPU bound solver only moves the queue
               // from the ingress into the kernel scheduler and inflates tail latency.
-              value: '--workers 2 --timeout 40 --max-requests 100 --max-requests-jitter 500'
+              // the access log is the only source of per request latency. %(D)s is the
+              // response time in microseconds, the rest of the format stays lean on purpose.
+              value: '--workers 2 --timeout 40 --max-requests 100 --max-requests-jitter 500 --access-logfile - --access-logformat \'%(m)s %(U)s %(s)s %(D)s\''
             }
             { name: 'JWT_TOKEN_SECRET', secretRef: 'jwt-token-secret' }
           ]

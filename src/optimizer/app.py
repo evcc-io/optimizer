@@ -23,8 +23,7 @@ def before_request_func():
             if token_type.lower() != 'bearer':
                 return jsonify({"message": "Invalid token type"}), 401
 
-            payload = jwt.decode(token, secret_key, algorithms=["HS256"])
-            print("subject:", payload.get('sub'))
+            jwt.decode(token, secret_key, algorithms=["HS256"])
         except jwt.ExpiredSignatureError:
             return jsonify({"message": "Token has expired"}), 401
         except jwt.InvalidTokenError:
