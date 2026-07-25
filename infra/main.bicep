@@ -91,8 +91,8 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
             { name: 'OPTIMIZER_TIME_LIMIT', value: '20' }
             { name: 'OPTIMIZER_NUM_THREADS', value: '1' }
             // roughly 2 percent of requests exhaust the time limit. Keep them for replay.
-            // The dump directory is ephemeral, a replica restart takes its contents with it.
-            { name: 'OPTIMIZER_DUMP_SLOW_REQUESTS', value: 'true' }
+            // The file is ephemeral, a replica restart takes it with it.
+            { name: 'OPTIMIZER_DUMP_SLOW_REQUESTS', value: '/tmp/slow-requests.jsonl' }
             {
               name: 'GUNICORN_CMD_ARGS'
               // one worker per vCPU. Oversubscribing a CPU bound solver only moves the queue

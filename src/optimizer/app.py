@@ -1,3 +1,4 @@
+import fcntl
 import json
 import os
 import pathlib
@@ -46,16 +47,21 @@ def dump_slow_request(payload, elapsed):
     The elapsed time covers model building as well as solving, so a request that only exceeds
     the limit while building is caught too. That one is equally worth looking at.
     """
-    limit = settings.time_limit
-    if not settings.dump_slow_requests or limit is None or elapsed < limit:
+    path, limit = settings.dump_slow_requests, settings.time_limit
+    if not path or limit is None or elapsed < limit:
         return
 
+    # one line per request, carrying the same "request" key as test_cases/*.json so a line
+    # can be replayed by the existing harness
+    line = json.dumps({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                       "elapsed": round(elapsed, 3), "request": payload}) + "\n"
     try:
-        directory = pathlib.Path(settings.dump_dir)
-        directory.mkdir(parents=True, exist_ok=True)
-        name = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%S%f}-{os.getpid()}.json"
-        # same shape as test_cases/*.json, so a dump can be replayed by the existing harness
-        (directory / name).write_text(json.dumps({"request": payload}, indent=1))
+        pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            # every gunicorn worker appends to the same file, and a request is far larger than
+            # the buffer size that would make the append atomic on its own
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.write(line)
     except OSError as e:
         # a full or read only disk must never turn a solved request into an error
         print("could not dump slow request:", e)
