@@ -6,8 +6,10 @@ from flask_restx import Api, Resource, fields
 from werkzeug.exceptions import BadRequest
 
 from .optimizer import BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
+from .settings import OptimizerSettings
 
 app = Flask(__name__)
+settings = OptimizerSettings()
 
 
 @app.before_request
@@ -23,7 +25,9 @@ def before_request_func():
             if token_type.lower() != 'bearer':
                 return jsonify({"message": "Invalid token type"}), 401
 
-            jwt.decode(token, secret_key, algorithms=["HS256"])
+            payload = jwt.decode(token, secret_key, algorithms=["HS256"])
+            if settings.log_subject:
+                print("subject:", payload.get('sub'))
         except jwt.ExpiredSignatureError:
             return jsonify({"message": "Token has expired"}), 401
         except jwt.InvalidTokenError:

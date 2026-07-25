@@ -2,10 +2,11 @@
 import json
 import pathlib
 
+import jwt
 import numpy
 import pytest
 
-from optimizer.app import app
+from optimizer.app import app, settings
 
 
 @pytest.mark.parametrize('test_case', pathlib.Path('test_cases').glob('*.json'))
@@ -63,6 +64,21 @@ def test_optimizer(test_case: pathlib.Path):
                 room = battery["s_max"] - soc[t]
                 assert charge <= 1 or charge >= step - 1 or room <= step + 1, \
                     f"battery {i} t={t}: charges {charge} below c_min step {step} with {room} Wh room to s_max"
+
+
+def test_subject_logging_is_configurable(capsys, monkeypatch):
+    monkeypatch.setenv("JWT_TOKEN_SECRET", "test-secret")
+    token = jwt.encode({"sub": "someone"}, "test-secret", algorithm="HS256")
+    client = app.test_client()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    monkeypatch.setattr(settings, "log_subject", False)
+    client.post("/optimize/charge-schedule", json={}, headers=headers)
+    assert "subject:" not in capsys.readouterr().out
+
+    monkeypatch.setattr(settings, "log_subject", True)
+    client.post("/optimize/charge-schedule", json={}, headers=headers)
+    assert "subject: someone" in capsys.readouterr().out
 
 
 def test_abort_returns_json_message():
