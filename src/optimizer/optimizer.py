@@ -183,11 +183,14 @@ class Optimizer:
         self.variables['p_demand_pen'] = [[None for t in self.time_steps] for i in range(len(self.batteries))]
         # binary variable to allow one out of two alternative constraints
         self.variables['z_p_demand'] = [[None for t in self.time_steps] for i in range(len(self.batteries))]
+        # binary variable to capture when s_max is reached
+        self.variables['z_s_max_reached'] = [[None for t in self.time_steps] for i in range(len(self.batteries))]
         for i, bat in enumerate(self.batteries):
             if bat.p_demand is not None:
                 for t in self.time_steps:
                     self.variables['p_demand_pen'][i][t] = pulp.LpVariable(f"p_demand_pen_{i}_{t}", lowBound=0)
                     self.variables['z_p_demand'][i][t] = pulp.LpVariable(f"z_p_demand_{i}_{t}", cat='Binary')
+                    self.variables['z_s_max_reached'][i][t] = pulp.LpVariable(f"z_s_max_reached_{i}_{t}", cat='Binary')
 
         # penalty variable for staying above max SOC and below min SOC
         self.variables['s_max_pen'] = [[pulp.LpVariable(f"s_max_pen_{i}_{t}", lowBound=0) for t in self.time_steps] for i in range(len(self.batteries))]
@@ -506,25 +509,34 @@ class Optimizer:
             if bat.p_demand is not None:
                 for t in self.time_steps:
                     if bat.p_demand[t] > 0:
-                        # clip required charge to max charging power if needed
-                        # and leave some air to breathe for the optimizer
+                        # clip requested charging power to max charging power if needed
                         p_demand = min(bat.c_max * self.time_series.dt[t] / 3600., bat.p_demand[t])
-                        # two alternative constraints, only one is active:
-                        # constraint option 1: charge energy tries to reach min charge energy parameter
+
+                        # introduce z_p_demand to become only 1 if s_max is almost reached and the
+                        # charging with c_min would stop before the end of the time slot
+                        self.problem += ((bat.s_max - self.variables['s'][i][t])
+                                         <= (1 - self.variables['z_p_demand'][i][t]) * self.M
+                                         + bat.c_min * self.time_series.dt[t] / 3600.)
+
+                        # introduce z_s_max_reached to become only 1 if s_max is fully reached
+                        self.problem += ((bat.s_max - self.variables['s'][i][t])
+                                         <= (1 - self.variables['z_s_max_reached'][i][t]) * self.M)
+
+                        # set a "soft" constraint to reach the requested charging rate if possible.
+                        # deactivate it if s_max is already reached
                         self.problem += (self.variables['c'][i][t] + self.variables['p_demand_pen'][i][t]
-                                         + self.M * self.variables['z_p_demand'][i][t] >= p_demand)
-                        # constraint option 2: charge energy tries to reach energy to fill the battery to s_max
-                        self.problem += (self.variables['c'][i][t] + self.variables['p_demand_pen'][i][t]
-                                         + self.M * (1 - self.variables['z_p_demand'][i][t])
-                                         - (self.batteries[i].s_max - self.variables['s'][i][t]) >= 0.)
-                    elif bat.c_min > 0:
-                        # in time steps without given charging demand, apply normal lower bound:
-                        # Lower bound: either 0 or at least c_min
-                        self.problem += (self.variables['c'][i][t] >= bat.c_min * self.time_series.dt[t] / 3600.
-                                         * self.variables['z_c'][i][t])
+                                         >= (1 - self.variables['z_s_max_reached'][i][t]) * p_demand)
+                    else:
+                        # if there is no p_demand set, make sure z_p_demand is 0 to keep the below c_min constraint effective
+                        self.problem += (self.variables['z_p_demand'][i][t] <= 0)
+
+                    if bat.c_min > 0:
+                        # set constraints to exclude charging between 0 and c_min if z_p_demand is not 1.
+                        self.problem += (self.variables['c'][i][t] + self.variables['z_p_demand'][i][t] * self.M
+                                         >= bat.c_min * self.time_series.dt[t] / 3600. * self.variables['z_c'][i][t])
                         self.problem += (self.variables['c'][i][t] <= self.M * self.variables['z_c'][i][t])
 
-            # Constraint (7): Minimum charge power limits if there is not charge demand
+            # Constraint (7): Minimum charge power limits if there is no charge demand
             elif bat.c_min > 0:
                 for t in self.time_steps:
                     # Lower bound: either 0 or at least c_min
