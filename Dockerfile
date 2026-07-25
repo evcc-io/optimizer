@@ -28,7 +28,7 @@ COPY --from=builder --chown=app:app /app/.venv /app/.venv
 
 # Run the application
 ENV PYTHONUNBUFFERED=1
-ENV OPTIMIZER_TIME_LIMIT=25
+ENV OPTIMIZER_TIME_LIMIT=10
 ENV OPTIMIZER_NUM_THREADS=1
 # the access log is the only source of per request latency, keep the format lean
 ENV GUNICORN_CMD_ARGS="--workers 4 --max-requests 32 --access-logfile - --access-logformat '%(m)s %(U)s %(s)s %(D)s'"

@@ -88,9 +88,13 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
             memory: '2Gi'
           }
           env: [
-            { name: 'OPTIMIZER_TIME_LIMIT', value: '20' }
+            // requests that reach the limit walk a cost optimal plateau rather than close a gap:
+            // replaying 20 collected ones, 17 end on the same objective at 10 s as at 20 s. The
+            // exception cost 4.7 percent, so this halves the latency and the core they hold on a
+            // one vCPU replica at the price of a worse schedule for a small share of them.
+            { name: 'OPTIMIZER_TIME_LIMIT', value: '10' }
             { name: 'OPTIMIZER_NUM_THREADS', value: '1' }
-            // roughly 2 percent of requests exhaust the time limit. Keep them for replay.
+            // the dump threshold is the time limit, so this collects everything above 10 s now.
             // The file is ephemeral, a replica restart takes it with it.
             { name: 'OPTIMIZER_DUMP_SLOW_REQUESTS', value: '/tmp/slow-requests.jsonl' }
             {
