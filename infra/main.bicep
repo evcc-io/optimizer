@@ -81,16 +81,20 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
         {
           name: 'optimizer'
           image: containerImage
+          // one vCPU per replica keeps allocation close to demand. The solve is CPU bound,
+          // so a coarser replica rounds up into cores that are paid for and never used.
           resources: {
-            cpu: json('2')
-            memory: '4Gi'
+            cpu: json('1')
+            memory: '2Gi'
           }
           env: [
             { name: 'OPTIMIZER_TIME_LIMIT', value: '20' }
             { name: 'OPTIMIZER_NUM_THREADS', value: '1' }
             {
               name: 'GUNICORN_CMD_ARGS'
-              value: '--workers 8 --timeout 40 --max-requests 100 --max-requests-jitter 500'
+              // one worker per vCPU. Oversubscribing a CPU bound solver only moves the queue
+              // from the ingress into the kernel scheduler and inflates tail latency.
+              value: '--workers 2 --timeout 40 --max-requests 100 --max-requests-jitter 500'
             }
             { name: 'JWT_TOKEN_SECRET', secretRef: 'jwt-token-secret' }
           ]
@@ -109,12 +113,24 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
       scale: {
         minReplicas: 1
         maxReplicas: 50
+        // KEDA takes the maximum over both rules. The CPU rule is the one that matches the
+        // bottleneck, the concurrency rule stays as a fast reacting guard for bursts.
         rules: [
           {
             name: 'http-scaling'
             http: {
               metadata: {
-                concurrentRequests: '16'
+                concurrentRequests: '8'
+              }
+            }
+          }
+          {
+            name: 'cpu-scaling'
+            custom: {
+              type: 'cpu'
+              metadata: {
+                type: 'Utilization'
+                value: '75'
               }
             }
           }
