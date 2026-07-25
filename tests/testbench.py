@@ -127,16 +127,17 @@ if action == "run":
         dt0 = dt0[:-1]
         ts_time = np.cumsum(dt0)
         ts_period = np.array(dt)
+        ts_Wh_to_kW = np.divide(3.6, ts_input["dt"])
         ts_prc_import = np.array(ts_input["p_N"])*1000
         ts_prc_export = np.array(ts_input["p_E"])*1000
         ts_solar_raw = ts_input["ft"]
         ts_demand_raw = ts_input["gt"]
         ts_grid_import_raw = response.json["grid_import"]
         ts_grid_export_raw = response.json["grid_export"]
-        ts_solar = np.divide(ts_input["ft"], ts_input["dt"])
-        ts_demand = np.negative(np.divide(ts_input["gt"], ts_input["dt"]))
-        ts_grid = np.divide(np.subtract(response.json["grid_import"], response.json["grid_export"]), ts_input["dt"])
-        ts_grid_exp = np.divide(np.subtract(expected_response["grid_import"], expected_response["grid_export"]), ts_input["dt"])
+        ts_solar = np.multiply(ts_input["ft"], ts_Wh_to_kW)
+        ts_demand = np.negative(np.multiply(ts_input["gt"], ts_Wh_to_kW))
+        ts_grid = np.multiply(np.subtract(response.json["grid_import"], response.json["grid_export"]), ts_Wh_to_kW)
+        ts_grid_exp = np.multiply(np.subtract(expected_response["grid_import"], expected_response["grid_export"]), ts_Wh_to_kW)
         ts_grid_dev = np.divide(np.subtract(ts_grid, ts_grid_exp), ts_grid_exp)
 
         # create the table dataframe
@@ -182,11 +183,11 @@ if action == "run":
             bat_capacity = request["batteries"][i]["s_max"]
             if "s_capacity" in request["batteries"][i]:
                 bat_capacity = request["batteries"][i]["s_capacity"]
-            df_diagram[f"P_bat{i}"] = np.divide(np.subtract(bat["discharging_power"], bat["charging_power"]), ts_input["dt"])
+            df_diagram[f"P_bat{i}"] = np.multiply(np.subtract(bat["discharging_power"], bat["charging_power"]), ts_Wh_to_kW)
             df_diagram[f"SOC_bat{i}"] = np.divide(bat["state_of_charge"], bat_capacity)*100
-            df_diagram[f"P_bat{i}_exp"] = np.divide(np.subtract(expected_response["batteries"][i]["discharging_power"],
-                                                                expected_response["batteries"][i]["charging_power"]),
-                                                    ts_input["dt"])
+            df_diagram[f"P_bat{i}_exp"] = np.multiply(np.subtract(expected_response["batteries"][i]["discharging_power"],
+                                                                  expected_response["batteries"][i]["charging_power"]),
+                                                      ts_Wh_to_kW)
             df_diagram[f"P_bat{i}_dev"] = np.divide(np.subtract(df_diagram[f"P_bat{i}"], df_diagram[f"P_bat{i}_exp"]), df_diagram[f"P_bat{i}_exp"])
 
         df_diagram['time'] = pd.to_datetime(df_diagram['time'], unit='s')
