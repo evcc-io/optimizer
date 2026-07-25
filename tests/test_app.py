@@ -2,10 +2,11 @@
 import json
 import pathlib
 
+import jwt
 import numpy
 import pytest
 
-from optimizer.app import app
+from optimizer.app import app, settings
 
 
 @pytest.mark.parametrize('test_case', pathlib.Path('test_cases').glob('*.json'))
@@ -34,6 +35,70 @@ def test_optimizer(test_case: pathlib.Path):
                              expected_objective_value,
                              rtol=1e-05, atol=1e-08, equal_nan=False), \
             f"objective value: {actual_objective_value}, expected was: {expected_objective_value}"
+    # cases marked strict also compare the schedule itself. needed where the feature under
+    # test only picks between cost neutral alternatives, which the objective value hides
+    if test_data.get("strict"):
+        for key in ("grid_import", "grid_export"):
+            assert numpy.allclose(response.json[key], expected_response[key], atol=1), \
+                f"{key}: {response.json[key]}, expected was: {expected_response[key]}"
+        for i, battery in enumerate(expected_response["batteries"]):
+            for key in ("charging_power", "discharging_power"):
+                actual = response.json["batteries"][i][key]
+                assert numpy.allclose(actual, battery[key], atol=1), \
+                    f"battery {i} {key}: {actual}, expected was: {battery[key]}"
+
+    # independent invariant, not a comparison against stored output: with c_min set every step
+    # charges either nothing or at least c_min, except when the battery is essentially full and
+    # only a sub-c_min top-off remains. guards against regressions like #19, where p_demand let
+    # charging slip below c_min far from s_max.
+    if response.json["status"] == "Optimal":
+        dt = request["time_series"]["dt"]
+        for i, battery in enumerate(request["batteries"]):
+            c_min = battery.get("c_min", 0)
+            if not c_min:
+                continue
+            charging = response.json["batteries"][i]["charging_power"]
+            soc = response.json["batteries"][i]["state_of_charge"]
+            for t, charge in enumerate(charging):
+                step = c_min * dt[t] / 3600
+                room = battery["s_max"] - soc[t]
+                assert charge <= 1 or charge >= step - 1 or room <= step + 1, \
+                    f"battery {i} t={t}: charges {charge} below c_min step {step} with {room} Wh room to s_max"
+
+
+def test_subject_logging_is_configurable(capsys, monkeypatch):
+    monkeypatch.setenv("JWT_TOKEN_SECRET", "test-secret")
+    token = jwt.encode({"sub": "someone"}, "test-secret", algorithm="HS256")
+    client = app.test_client()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    monkeypatch.setattr(settings, "log_subject", False)
+    client.post("/optimize/charge-schedule", json={}, headers=headers)
+    assert "subject:" not in capsys.readouterr().out
+
+    monkeypatch.setattr(settings, "log_subject", True)
+    client.post("/optimize/charge-schedule", json={}, headers=headers)
+    assert "subject: someone" in capsys.readouterr().out
+
+
+def test_slow_requests_are_dumped(tmp_path, monkeypatch):
+    request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
+    dump = tmp_path / "nested" / "slow.jsonl"
+    client = app.test_client()
+    # a limit of zero makes every solve count as exhausting it
+    monkeypatch.setattr(settings, "time_limit", 0)
+
+    monkeypatch.setattr(settings, "dump_slow_requests", None)
+    client.post("/optimize/charge-schedule", json=request)
+    assert not dump.exists()
+
+    monkeypatch.setattr(settings, "dump_slow_requests", str(dump))
+    client.post("/optimize/charge-schedule", json=request)
+    client.post("/optimize/charge-schedule", json=request)
+    lines = dump.read_text().splitlines()
+    assert len(lines) == 2, "every slow request appends one line"
+    assert json.loads(lines[0])["request"] == request
+    assert json.loads(lines[1])["elapsed"] > 0
 
 
 def test_abort_returns_json_message():

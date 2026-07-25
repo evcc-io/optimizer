@@ -20,6 +20,24 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Verify image provides linux/amd64
+        run: |
+          image="${{ env.IMAGE }}:${{ inputs.image_tag || 'latest' }}"
+          # multi-platform tags publish an index; single-platform tags publish a
+          # bare manifest, for which the index template fails and we fall back
+          platforms=$(docker buildx imagetools inspect "$image" \
+              --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}' 2>/dev/null) \
+            || platforms=$(docker buildx imagetools inspect "$image" \
+              --format '{{.Image.OS}}/{{.Image.Architecture}}')
+          echo "$image provides: $platforms"
+          case " $platforms " in
+            *" linux/amd64 "*) ;;
+            *)
+              echo "::error::$image has no linux/amd64 manifest. Container Apps nodes are amd64, so every replica would fail with ImagePullBackOff. Publish via the 'Publish Docker' workflow instead of pushing by hand."
+              exit 1
+              ;;
+          esac
+
       - uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}

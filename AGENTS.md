@@ -57,7 +57,8 @@ The model is a maximization problem. Read these before changing it:
 
 - The suite runs with `uv run pytest`.
 - `test_cases/*.json` are loaded by `tests/test_app.py`. Each file holds a `request` and an optional `expected_response`, and the test asserts the optimizer status and, with `numpy.isclose`, the objective value. Add a scenario by dropping in a JSON file.
-- For behavior the data driven harness cannot assert, such as a specific charge schedule, construct an `Optimizer` directly in a dedicated test module and assert on the returned dict.
+- A test case with `"strict": true` additionally compares grid import, grid export, and the battery schedules with `numpy.allclose`. Use it for features that only pick between cost neutral alternatives, where the objective value barely moves. Do not set it on scenarios with several equally optimal schedules, the comparison would be arbitrary.
+- Prefer a data driven case over a dedicated test module, so a failure points at the scenario rather than at a feature specific script.
 - Cover both the success and the limit violation paths.
 
 ## Writing Style

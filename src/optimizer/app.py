@@ -1,4 +1,9 @@
+import fcntl
+import json
 import os
+import pathlib
+import time
+from datetime import datetime, timezone
 
 import jwt
 from flask import Flask, jsonify, request
@@ -6,8 +11,10 @@ from flask_restx import Api, Resource, fields
 from werkzeug.exceptions import BadRequest
 
 from .optimizer import BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
+from .settings import OptimizerSettings
 
 app = Flask(__name__)
+settings = OptimizerSettings()
 
 
 @app.before_request
@@ -24,13 +31,40 @@ def before_request_func():
                 return jsonify({"message": "Invalid token type"}), 401
 
             payload = jwt.decode(token, secret_key, algorithms=["HS256"])
-            print("subject:", payload.get('sub'))
+            if settings.log_subject:
+                print("subject:", payload.get('sub'))
         except jwt.ExpiredSignatureError:
             return jsonify({"message": "Token has expired"}), 401
         except jwt.InvalidTokenError:
             return jsonify({"message": "Invalid token"}), 401
         except Exception as e:
             return jsonify({"message": str(e)}), 401
+
+
+def dump_slow_request(payload, elapsed):
+    """Persist requests that exhausted the solver time limit, they are the ones worth replaying.
+
+    The elapsed time covers model building as well as solving, so a request that only exceeds
+    the limit while building is caught too. That one is equally worth looking at.
+    """
+    path, limit = settings.dump_slow_requests, settings.time_limit
+    if not path or limit is None or elapsed < limit:
+        return
+
+    # one line per request, carrying the same "request" key as test_cases/*.json so a line
+    # can be replayed by the existing harness
+    line = json.dumps({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                       "elapsed": round(elapsed, 3), "request": payload}) + "\n"
+    try:
+        pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            # every gunicorn worker appends to the same file, and a request is far larger than
+            # the buffer size that would make the append atomic on its own
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.write(line)
+    except OSError as e:
+        # a full or read only disk must never turn a solved request into an error
+        print("could not dump slow request:", e)
 
 
 api = Api(app, version='1.0', title='EV Charging Optimization API',
@@ -214,7 +248,9 @@ class OptimizeCharging(Resource):
                 M=1e6
             )
 
+            started = time.perf_counter()
             result = optimizer.solve()
+            dump_slow_request(data, time.perf_counter() - started)
             return result
 
         except Exception as e:

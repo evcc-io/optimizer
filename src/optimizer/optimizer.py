@@ -191,11 +191,14 @@ class Optimizer:
         self.variables['p_demand_pen'] = [[None for t in self.time_steps] for i in range(len(self.batteries))]
         # binary variable to allow one out of two alternative constraints
         self.variables['z_p_demand'] = [[None for t in self.time_steps] for i in range(len(self.batteries))]
+        # binary variable to capture when s_max is reached
+        self.variables['z_s_max_reached'] = [[None for t in self.time_steps] for i in range(len(self.batteries))]
         for i, bat in enumerate(self.batteries):
             if bat.p_demand is not None:
                 for t in self.time_steps:
                     self.variables['p_demand_pen'][i][t] = pulp.LpVariable(f"p_demand_pen_{i}_{t}", lowBound=0)
                     self.variables['z_p_demand'][i][t] = pulp.LpVariable(f"z_p_demand_{i}_{t}", cat='Binary')
+                    self.variables['z_s_max_reached'][i][t] = pulp.LpVariable(f"z_s_max_reached_{i}_{t}", cat='Binary')
 
         # penalty variable for staying above max SOC and below min SOC
         self.variables['s_max_pen'] = [[pulp.LpVariable(f"s_max_pen_{i}_{t}", lowBound=0) for t in self.time_steps] for i in range(len(self.batteries))]
@@ -414,12 +417,22 @@ class Optimizer:
                              == e_grid_exp
                              + self.time_series.gt[t])
 
-        # Constraints (4)-(5): Grid flow direction
+        # Constraints (4)-(5): Grid flow direction. Export/import have natural
+        # per-step caps (export: solar plus discharge-to-grid capacity; import:
+        # demand plus grid-charge capacity) that tighten the LP relaxation vs
+        # the global big-M without excluding any integer point. When a grid
+        # limit is active, the opposite side's unbounded excess variable enters
+        # the energy balance, so only then fall back to the global big-M.
+        cap_d_exp = sum(b.d_max for b in self.batteries if b.discharge_to_grid)
+        cap_c_imp = sum(b.c_max for b in self.batteries if b.charge_from_grid)
         for t in self.time_steps:
+            dth = self.time_series.dt[t] / 3600.
+            m_exp = self.time_series.ft[t] + cap_d_exp * dth if self.grid.p_max_imp is None else self.M
+            m_imp = self.time_series.gt[t] + cap_c_imp * dth if self.grid.p_max_exp is None else self.M
             # Export constraint
-            self.problem += self.variables['e'][t] <= self.M * self.variables['y'][t]
+            self.problem += self.variables['e'][t] <= m_exp * self.variables['y'][t]
             # Import constraint
-            self.problem += self.variables['n'][t] <= self.M * (1 - self.variables['y'][t])
+            self.problem += self.variables['n'][t] <= m_imp * (1 - self.variables['y'][t])
 
         # limit regular grid import power
         if self.grid.p_max_imp is not None:
@@ -428,7 +441,8 @@ class Optimizer:
                 for t in self.time_steps:
                     self.problem += self.variables['n'][t] <= self.grid.p_max_imp * self.time_series.dt[t] / 3600
                     self.problem += (self.grid.p_max_imp * self.time_series.dt[t] / 3600 - self.variables['n'][t]
-                                     <= self.M * self.variables['z_imp_lim'][t])
+                                     <= self.grid.p_max_imp * self.time_series.dt[t] / 3600
+                                     * self.variables['z_imp_lim'][t])
                     self.problem += (self.variables['e_imp_lim_exc'][t]
                                      <= self.M * (1 - self.variables['z_imp_lim'][t]))
             else:
@@ -436,7 +450,8 @@ class Optimizer:
                 for t in self.time_steps:
                     self.problem += self.variables['n'][t] <= self.grid.p_max_imp * self.time_series.dt[t] / 3600
                     self.problem += (self.grid.p_max_imp * self.time_series.dt[t] / 3600 - self.variables['n'][t]
-                                     <= self.M * self.variables['z_imp_lim'][t])
+                                     <= self.grid.p_max_imp * self.time_series.dt[t] / 3600
+                                     * self.variables['z_imp_lim'][t])
                     self.problem += (self.variables['e_imp_lim_exc'][t]
                                      <= self.M * (1 - self.variables['z_imp_lim'][t]))
 
@@ -445,7 +460,8 @@ class Optimizer:
             for t in self.time_steps:
                 self.problem += self.variables['e'][t] <= self.grid.p_max_exp * self.time_series.dt[t] / 3600
                 self.problem += (self.grid.p_max_exp * self.time_series.dt[t] / 3600 - self.variables['e'][t]
-                                 <= self.M * self.variables['z_exp_lim'][t])
+                                 <= self.grid.p_max_exp * self.time_series.dt[t] / 3600
+                                 * self.variables['z_exp_lim'][t])
                 self.problem += (self.variables['e_exp_lim_exc'][t]
                                  <= self.M * (1 - self.variables['z_exp_lim'][t]))
 
@@ -515,48 +531,65 @@ class Optimizer:
             if bat.p_demand is not None:
                 for t in self.time_steps:
                     if bat.p_demand[t] > 0:
-                        # clip required charge to max charging power if needed
-                        # and leave some air to breathe for the optimizer
+                        # clip requested charging power to max charging power if needed
                         p_demand = min(bat.c_max * self.time_series.dt[t] / 3600., bat.p_demand[t])
-                        # two alternative constraints, only one is active:
-                        # constraint option 1: charge energy tries to reach min charge energy parameter
-                        self.problem += (self.variables['c'][i][t] + self.variables['p_demand_pen'][i][t]
-                                         + self.M * self.variables['z_p_demand'][i][t] >= p_demand)
-                        # constraint option 2: charge energy tries to reach energy to fill the battery to s_max
-                        self.problem += (self.variables['c'][i][t] + self.variables['p_demand_pen'][i][t]
-                                         + self.M * (1 - self.variables['z_p_demand'][i][t])
-                                         - (self.batteries[i].s_max - self.variables['s'][i][t]) >= 0.)
-                    elif bat.c_min > 0:
-                        # in time steps without given charging demand, apply normal lower bound:
-                        # Lower bound: either 0 or at least c_min
-                        self.problem += (self.variables['c'][i][t] >= bat.c_min * self.time_series.dt[t] / 3600.
-                                         * self.variables['z_c'][i][t])
-                        self.problem += (self.variables['c'][i][t] <= self.M * self.variables['z_c'][i][t])
 
-            # Constraint (7): Minimum charge power limits if there is not charge demand
+                        # introduce z_p_demand to become only 1 if s_max is almost reached and the
+                        # charging with c_min would stop before the end of the time slot
+                        # s is bounded below by 0, so s_max is the largest the left side can get
+                        self.problem += ((bat.s_max - self.variables['s'][i][t])
+                                         <= (1 - self.variables['z_p_demand'][i][t]) * bat.s_max
+                                         + bat.c_min * self.time_series.dt[t] / 3600.)
+
+                        # introduce z_s_max_reached to become only 1 if s_max is fully reached
+                        self.problem += ((bat.s_max - self.variables['s'][i][t])
+                                         <= (1 - self.variables['z_s_max_reached'][i][t]) * bat.s_max)
+
+                        # set a "soft" constraint to reach the requested charging rate if possible.
+                        # deactivate it if s_max is already reached
+                        self.problem += (self.variables['c'][i][t] + self.variables['p_demand_pen'][i][t]
+                                         >= (1 - self.variables['z_s_max_reached'][i][t]) * p_demand)
+                    else:
+                        # if there is no p_demand set, make sure z_p_demand is 0 to keep the below c_min constraint effective
+                        self.problem += (self.variables['z_p_demand'][i][t] <= 0)
+
+                    if bat.c_min > 0:
+                        # set constraints to exclude charging between 0 and c_min if z_p_demand is not 1.
+                        self.problem += (self.variables['c'][i][t]
+                                         + bat.c_min * self.time_series.dt[t] / 3600. * self.variables['z_p_demand'][i][t]
+                                         >= bat.c_min * self.time_series.dt[t] / 3600. * self.variables['z_c'][i][t])
+                        self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
+                                         * self.variables['z_c'][i][t])
+
+            # Constraint (7): Minimum charge power limits if there is no charge demand
             elif bat.c_min > 0:
                 for t in self.time_steps:
                     # Lower bound: either 0 or at least c_min
                     self.problem += (self.variables['c'][i][t] >= bat.c_min * self.time_series.dt[t] / 3600.
                                      * self.variables['z_c'][i][t])
-                    self.problem += (self.variables['c'][i][t] <= self.M * self.variables['z_c'][i][t])
+                    self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
+                                     * self.variables['z_c'][i][t])
 
             # control battery charging from grid
             if not bat.charge_from_grid:
                 for t in self.time_steps:
-                    self.problem += (self.variables['c'][i][t] <= self.M * self.variables['y'][t])
+                    self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
+                                     * self.variables['y'][t])
 
             # control battery discharging to grid
             if not bat.discharge_to_grid:
                 for t in self.time_steps:
-                    self.problem += (self.variables['d'][i][t] <= self.M * (1 - self.variables['y'][t]))
+                    self.problem += (self.variables['d'][i][t] <= bat.d_max * self.time_series.dt[t] / 3600.
+                                     * (1 - self.variables['y'][t]))
 
             # lock charging against discharging
             for t in self.time_steps:
                 # Discharge constraint
-                self.problem += self.variables['d'][i][t] <= self.M * self.variables['z_cd'][i][t]
+                self.problem += (self.variables['d'][i][t] <= bat.d_max * self.time_series.dt[t] / 3600.
+                                 * self.variables['z_cd'][i][t])
                 # Charge constraint
-                self.problem += self.variables['c'][i][t] <= self.M * (1 - self.variables['z_cd'][i][t])
+                self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
+                                 * (1 - self.variables['z_cd'][i][t]))
 
     def solve(self) -> Dict:
         """
