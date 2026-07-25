@@ -81,6 +81,24 @@ def test_subject_logging_is_configurable(capsys, monkeypatch):
     assert "subject: someone" in capsys.readouterr().out
 
 
+def test_slow_requests_are_dumped(tmp_path, monkeypatch):
+    request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
+    client = app.test_client()
+    monkeypatch.setattr(settings, "dump_dir", str(tmp_path))
+    # a limit of zero makes every solve count as exhausting it
+    monkeypatch.setattr(settings, "time_limit", 0)
+
+    monkeypatch.setattr(settings, "dump_slow_requests", False)
+    client.post("/optimize/charge-schedule", json=request)
+    assert list(tmp_path.glob("*.json")) == []
+
+    monkeypatch.setattr(settings, "dump_slow_requests", True)
+    client.post("/optimize/charge-schedule", json=request)
+    dumps = list(tmp_path.glob("*.json"))
+    assert len(dumps) == 1
+    assert json.loads(dumps[0].read_text())["request"] == request
+
+
 def test_abort_returns_json_message():
     # message-only api.abort(400, ...) must return a JSON body, not an empty response
     client = app.test_client()

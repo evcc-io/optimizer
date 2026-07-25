@@ -1,4 +1,8 @@
+import json
 import os
+import pathlib
+import time
+from datetime import datetime, timezone
 
 import jwt
 from flask import Flask, jsonify, request
@@ -34,6 +38,27 @@ def before_request_func():
             return jsonify({"message": "Invalid token"}), 401
         except Exception as e:
             return jsonify({"message": str(e)}), 401
+
+
+def dump_slow_request(payload, elapsed):
+    """Persist requests that exhausted the solver time limit, they are the ones worth replaying.
+
+    The elapsed time covers model building as well as solving, so a request that only exceeds
+    the limit while building is caught too. That one is equally worth looking at.
+    """
+    limit = settings.time_limit
+    if not settings.dump_slow_requests or limit is None or elapsed < limit:
+        return
+
+    try:
+        directory = pathlib.Path(settings.dump_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        name = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%S%f}-{os.getpid()}.json"
+        # same shape as test_cases/*.json, so a dump can be replayed by the existing harness
+        (directory / name).write_text(json.dumps({"request": payload}, indent=1))
+    except OSError as e:
+        # a full or read only disk must never turn a solved request into an error
+        print("could not dump slow request:", e)
 
 
 api = Api(app, version='1.0', title='EV Charging Optimization API',
@@ -217,7 +242,9 @@ class OptimizeCharging(Resource):
                 M=1e6
             )
 
+            started = time.perf_counter()
             result = optimizer.solve()
+            dump_slow_request(data, time.perf_counter() - started)
             return result
 
         except Exception as e:
