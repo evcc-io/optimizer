@@ -33,6 +33,17 @@ The optimizer buys all 29 kWh of grid energy in the three cheapest hours of the 
   <img alt="Optimized grid exchange, battery power and state of charge over 24 hours" src="docs/img/example-result-light.svg">
 </picture>
 
+## Levelling grid peaks
+
+Cheapest is not always kindest to the grid connection. The same house on a *flat* tariff — where nothing but the strategy decides when to charge — takes its 29 kWh at the full 11 kW in the last two hours before the EV deadline, and pushes the midday surplus out in two short bursts.
+
+`attenuate_grid_peaks` penalizes both the highest grid power over the horizon and the step-to-step ramp, on the import and the feed-in side. The same energy then arrives as a flat 3.6 kW plateau, and the feed-in peak drops from 1.3 kW to 0.25 kW. Nothing costs more — the connection just sees a calmer profile. `attenuate_demand_peaks` and `attenuate_feedin_peaks` do the same for one side only.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-peak-dark.svg">
+  <img alt="Grid exchange over 24 hours without a strategy and with attenuate_grid_peaks, showing the import peak dropping from 11.5 kW to 3.6 kW" src="docs/img/example-peak-light.svg">
+</picture>
+
 ## API
 
 `POST /optimize/charge-schedule` takes the whole problem as one JSON document and returns the schedule. `GET /optimize/health` is the liveness probe. Every field is documented in [`openapi.yaml`](openapi.yaml).
