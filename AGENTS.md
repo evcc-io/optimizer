@@ -24,7 +24,7 @@ All Python commands run through `uv`. Use `uv run python`, never bare `python`, 
 
 - `src/optimizer/optimizer.py` builds and solves the MILP. `Optimizer` assembles the variables, objective, and constraints, then `solve()` returns the result dict.
 - `src/optimizer/app.py` is the Flask API. It parses the request into the dataclasses (`GridConfig`, `BatteryConfig`, `TimeSeriesData`, `OptimizationStrategy`), runs the optimizer, and marshals the response. The optimization endpoint is `POST /optimize/charge-schedule`.
-- `src/optimizer/settings.py` holds runtime settings (solver threads, time limit) via pydantic-settings with the `OPTIMIZER_` env prefix.
+- `src/optimizer/settings.py` holds runtime settings (solver threads, time limit, MIP gap, strategy weight) via pydantic-settings with the `OPTIMIZER_` env prefix.
 - `openapi.yaml` is the source of truth for the API contract.
 - `cmd/client.go` is the Go CLI client. `client/client.gen.go` is generated from `openapi.yaml` and must not be edited by hand.
 - `tests/` holds the test suite, `test_cases/*.json` hold data driven scenarios.
@@ -37,6 +37,7 @@ The model is a maximization problem. Read these before changing it:
 - Energy is in Wh, power limits in W, prices per Wh. Time steps carry individual durations `dt` in seconds, so convert power to energy with `dt / 3600`.
 - Penalty coefficients scale from a positive floor, `np.max([max_import_price, 0.1e-3])`. This keeps penalties positive even when market prices are zero or negative.
 - Charging and discharging strategies are cost-neutral tie-breakers. They add tiny soft terms (coefficient around `min_import_price * 1e-6`) that only decide between economically equal solutions. They are intentionally excluded from `get_clean_objective_value()`, which recomputes the real economic value without strategy incentives or penalties.
+- The objective is assembled in two parts, `cost_objective` (real money: grid cost, export revenue, battery value, demand rate, penalties) and `preference_objective` (the tie breakers, peak and ramp weights, priorities). Only the second is multiplied by `OPTIMIZER_STRATEGY_WEIGHT`. A new term goes into the part it belongs to, `tests/test_objective_split.py` asserts the split stays exhaustive.
 - `get_clean_objective_value()` measures battery value as `(s[T-1] - s[0]) * p_a`, but `s[0]` already includes the first time step's charging, so energy charged in the first step is not counted as a gain. The optimization objective itself uses the absolute final state of charge, `s[-1] * p_a`. Two solutions that are equal in the real objective can therefore report different clean values. Keep optional charging off the first time step when designing cost-neutrality scenarios.
 - Grid limits are soft: exceeding `p_max_imp` or `p_max_exp` is penalized rather than forbidden, so an over constrained request reports the violation instead of returning infeasible.
 - Never read `problem.status` to mean "the solver finished". pulp sets `LpStatusOptimal` whenever CBC returned any feasible solution, including one it stopped on at the time limit: on one captured request a 2 s and a 30 s run both reported Optimal, with objective values of -682466848 and 59714881. `problem.sol_status == LpSolutionOptimal` is the only thing that means proved. `solve()` folds the two into the reported status, `Optimal` against `Feasible`.
