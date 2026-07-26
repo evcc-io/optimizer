@@ -103,13 +103,30 @@ class Optimizer:
         # Compute scaling for strategy control parameters
         self.min_import_price = np.min(self.time_series.p_N)
         self.max_import_price = np.max(self.time_series.p_N)
+        self.max_export_price = np.max(self.time_series.p_E)
 
-        # scaling base for penalty parameters. Make sure goal_penalty is always positive.
-        self.penalty_base = np.max([self.max_import_price, 0.1e-3])
+        # scaling base for penalty parameters, derived from the largest real currency/Wh rate
+        # any economic term in the model can command, so that the avoidance penalties below
+        # (which are all multiples of penalty_base applied to Wh-denominated violations) stay
+        # above real cost trade-offs regardless of the price data. Make sure it's always positive.
+        horizon_hours = sum(self.time_series.dt) / 3600.
+        real_prices_per_wh = [
+            self.max_import_price,
+            self.max_export_price,
+            *(bat.p_a for bat in self.batteries),
+        ]
+        if self.grid.prc_p_exc_imp is not None and horizon_hours > 0:
+            # prc_p_exc_imp is currency/W, not currency/Wh like the terms above. The constraint
+            # e_imp_lim_exc[t] <= p_max_imp_exc * dt[t]/3600 (see _add_energy_balance_constraints)
+            # means 1 W of p_max_imp_exc unlocks dt[t]/3600 Wh of headroom at every time step, so
+            # summed over the horizon 1 W is worth horizon_hours Wh - dividing by that converts
+            # the demand rate into the same currency/Wh unit as the other terms.
+            real_prices_per_wh.append(self.grid.prc_p_exc_imp / horizon_hours)
+        self.penalty_base = np.max(real_prices_per_wh + [0.1e-3])
 
         # scaling for penalty parameters
         self.prc_e_goal_pen = self.penalty_base * 10e1
-        self.prc_p_goal_pen = self.penalty_base * np.max(self.time_series.dt) / 3600 * 10e1
+        self.prc_p_goal_pen = self.penalty_base * 10e1
         self.prc_soc_exc_pen = self.penalty_base * 10e2
 
         # penalty for exceeding grid import limit. Result shall not become infeasible but report the violation
