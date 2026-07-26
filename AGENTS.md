@@ -39,6 +39,7 @@ The model is a maximization problem. Read these before changing it:
 - Charging and discharging strategies are cost-neutral tie-breakers. They add tiny soft terms (coefficient around `min_import_price * 1e-6`) that only decide between economically equal solutions. They are intentionally excluded from `get_clean_objective_value()`, which recomputes the real economic value without strategy incentives or penalties.
 - `get_clean_objective_value()` measures battery value as `(s[T-1] - s[0]) * p_a`, but `s[0]` already includes the first time step's charging, so energy charged in the first step is not counted as a gain. The optimization objective itself uses the absolute final state of charge, `s[-1] * p_a`. Two solutions that are equal in the real objective can therefore report different clean values. Keep optional charging off the first time step when designing cost-neutrality scenarios.
 - Grid limits are soft: exceeding `p_max_imp` or `p_max_exp` is penalized rather than forbidden, so an over constrained request reports the violation instead of returning infeasible.
+- The assembled objective is multiplied by `OBJECTIVE_SCALE` before it goes to the solver. Prices per Wh put the raw coefficients close to CBC's absolute tolerances, where real improvements are discarded as numerical noise. Scaling does not change the argmax. Keep new objective terms in the same unit and let the scaling do its work, do not compensate for it in individual coefficients.
 
 ## Python Coding Standards
 
