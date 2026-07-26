@@ -6,6 +6,7 @@ import numpy as np
 import pulp
 
 from .settings import OptimizerSettings
+from .solvers import solver_wall
 
 
 @dataclass
@@ -592,14 +593,19 @@ class Optimizer:
             self.create_model()
 
         # Solve the problem
+        time_limit = self.settings.time_limit
         solver = pulp.PULP_CBC_CMD(
             msg=0,
             threads=self.settings.num_threads,
-            timeLimit=self.settings.time_limit,
+            timeLimit=time_limit,
         )
         with TemporaryDirectory() as tmpdir:
             solver.tmpDir = tmpdir
-            self.problem.solve(solver)
+            # CBC only tests -sec between branch and bound nodes, so presolve and the root
+            # LP can run past it. Twice the limit plus five seconds leaves an honest solve
+            # room to finish and stops a stuck one before it costs the worker its replica.
+            with solver_wall(time_limit and 2 * time_limit + 5):
+                self.problem.solve(solver)
 
         # Extract results
         status = pulp.LpStatus[self.problem.status]

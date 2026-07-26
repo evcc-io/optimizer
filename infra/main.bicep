@@ -102,12 +102,13 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
               // one worker per vCPU, and the replica carries one. Two workers on one core let
               // a pair of concurrent solves halve each other's speed, which pushed a 20 s solve
               // past the request timeout and cost a worker, and with it a core, for good.
-              // the timeout sits above the worst elapsed time seen in production, 29 s, so it
-              // catches a genuinely stuck request without cutting a legitimate solve short.
+              // the solver holds itself to a 25 s wall now, so this is only the backstop for a
+              // request stuck outside the solve. It stays above the worst elapsed time seen in
+              // production, 30 s, because a worker killed here takes its replica's queue with it.
               // the config module reaps a solver that outlived its worker anyway.
               // the access log is the only source of per request latency. %(D)s is the
               // response time in microseconds, the rest of the format stays lean on purpose.
-              value: '--workers 1 --timeout 60 --max-requests 100 --max-requests-jitter 500 --config python:optimizer.gunicorn_conf --access-logfile - --access-logformat \'%(m)s %(U)s %(s)s %(D)s\''
+              value: '--workers 1 --timeout 40 --max-requests 100 --max-requests-jitter 500 --config python:optimizer.gunicorn_conf --access-logfile - --access-logformat \'%(m)s %(U)s %(s)s %(D)s\''
             }
             { name: 'JWT_TOKEN_SECRET', secretRef: 'jwt-token-secret' }
           ]
