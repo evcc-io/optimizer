@@ -14,6 +14,13 @@ CASES = ['012-early-charging-not-perfect',
          '021-min-pv-use-case-with-weird-behavior']
 STRATEGIES = ['none', 'charge_before_export', 'attenuate_grid_peaks']
 
+# how far below the unscaled result the scaled one may land before it counts as a loss. The two
+# are separate CBC runs and CBC converges to about 1e-7 in objective units, so anything tighter
+# than that measures the solver's own noise floor instead of the change: on linux the runs sit
+# 4e-9 apart on 019 with no strategy. A part per million is still three orders below the moves
+# this is meant to catch, the smallest of which is the 0.4 percent in the strategy weight table.
+TOLERANCE = 1e-6
+
 
 def build(request, charging):
     series = request['time_series']
@@ -65,5 +72,5 @@ def test_scaling_never_costs_objective_value(case, charging):
     plain = solve_at(request, charging, 1.0)
     scaled = solve_at(request, charging, OBJECTIVE_SCALE)
 
-    assert scaled >= plain - abs(plain) * 1e-9, \
+    assert scaled >= plain - abs(plain) * TOLERANCE, \
         f'objective at scale {OBJECTIVE_SCALE:g}: {scaled}, unscaled: {plain}'
