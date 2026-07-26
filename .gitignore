@@ -4,3 +4,4 @@
 __pycache__/
 tmp/*
 test_candidates/*
+slow-requests*.json*

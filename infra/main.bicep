@@ -88,18 +88,26 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
             memory: '2Gi'
           }
           env: [
-            { name: 'OPTIMIZER_TIME_LIMIT', value: '20' }
+            // requests that reach the limit walk a cost optimal plateau rather than close a gap:
+            // replaying 20 collected ones, 17 end on the same objective at 10 s as at 20 s. The
+            // exception cost 4.7 percent, so this halves the latency and the core they hold on a
+            // one vCPU replica at the price of a worse schedule for a small share of them.
+            { name: 'OPTIMIZER_TIME_LIMIT', value: '10' }
             { name: 'OPTIMIZER_NUM_THREADS', value: '1' }
-            // roughly 2 percent of requests exhaust the time limit. Keep them for replay.
+            // the dump threshold is the time limit, so this collects everything above 10 s now.
             // The file is ephemeral, a replica restart takes it with it.
             { name: 'OPTIMIZER_DUMP_SLOW_REQUESTS', value: '/tmp/slow-requests.jsonl' }
             {
               name: 'GUNICORN_CMD_ARGS'
-              // one worker per vCPU. Oversubscribing a CPU bound solver only moves the queue
-              // from the ingress into the kernel scheduler and inflates tail latency.
+              // one worker per vCPU, and the replica carries one. Two workers on one core let
+              // a pair of concurrent solves halve each other's speed, which pushed a 20 s solve
+              // past the request timeout and cost a worker, and with it a core, for good.
+              // the timeout sits above the worst elapsed time seen in production, 29 s, so it
+              // catches a genuinely stuck request without cutting a legitimate solve short.
+              // the config module reaps a solver that outlived its worker anyway.
               // the access log is the only source of per request latency. %(D)s is the
               // response time in microseconds, the rest of the format stays lean on purpose.
-              value: '--workers 2 --timeout 40 --max-requests 100 --max-requests-jitter 500 --access-logfile - --access-logformat \'%(m)s %(U)s %(s)s %(D)s\''
+              value: '--workers 1 --timeout 60 --max-requests 100 --max-requests-jitter 500 --config python:optimizer.gunicorn_conf --access-logfile - --access-logformat \'%(m)s %(U)s %(s)s %(D)s\''
             }
             { name: 'JWT_TOKEN_SECRET', secretRef: 'jwt-token-secret' }
           ]
