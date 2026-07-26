@@ -411,12 +411,7 @@ class Optimizer:
             # to power drawn beyond the p_max_imp threshold.
             e_grid_imp = self.variables['n'][t]
             if self.grid.p_max_imp is not None:
-                if self.is_grid_demand_rate_active:
-                    # demand rate calculation
-                    e_grid_imp = self.variables['n'][t]+self.variables['e_imp_lim_exc'][t]
-                else:
-                    # grid import power limit
-                    e_grid_imp = self.variables['n'][t]+self.variables['e_imp_lim_exc'][t]
+                e_grid_imp = self.variables['n'][t] + self.variables['e_imp_lim_exc'][t]
 
             # grid export: if there is a limit, the power exceeding the limit
             # is going to the penalty variable
@@ -447,28 +442,23 @@ class Optimizer:
             # Import constraint
             self.problem += self.variables['n'][t] <= m_imp * (1 - self.variables['y'][t])
 
-        # limit regular grid import power
+        # limit regular grid import power. The excess only opens once the regular portion sits at
+        # the limit, which is what makes the reported overshoot the actual overshoot. The switch
+        # is capped at the most a step can absorb rather than at the global big-M: with the global
+        # one the relaxation puts the binary at a fraction and the excess at an amount no schedule
+        # could ever use, which costs the solver an enormous search for the same answer.
         if self.grid.p_max_imp is not None:
-            if self.is_grid_demand_rate_active:
-                # limit the demand rate free portion of the power
-                for t in self.time_steps:
-                    self.problem += self.variables['n'][t] <= self.grid.p_max_imp * self.time_series.dt[t] / 3600
-                    self.problem += (self.grid.p_max_imp * self.time_series.dt[t] / 3600 - self.variables['n'][t]
-                                     <= self.grid.p_max_imp * self.time_series.dt[t] / 3600
-                                     * self.variables['z_imp_lim'][t])
-                    self.problem += (self.variables['e_imp_lim_exc'][t]
-                                     <= self.M * (1 - self.variables['z_imp_lim'][t]))
-            else:
-                # limit the actual import power
-                for t in self.time_steps:
-                    self.problem += self.variables['n'][t] <= self.grid.p_max_imp * self.time_series.dt[t] / 3600
-                    self.problem += (self.grid.p_max_imp * self.time_series.dt[t] / 3600 - self.variables['n'][t]
-                                     <= self.grid.p_max_imp * self.time_series.dt[t] / 3600
-                                     * self.variables['z_imp_lim'][t])
-                    self.problem += (self.variables['e_imp_lim_exc'][t]
-                                     <= self.M * (1 - self.variables['z_imp_lim'][t]))
+            for t in self.time_steps:
+                lim = self.grid.p_max_imp * self.time_series.dt[t] / 3600
+                self.problem += self.variables['n'][t] <= lim
+                self.problem += (lim - self.variables['n'][t] <= lim * self.variables['z_imp_lim'][t])
+                self.problem += (self.variables['e_imp_lim_exc'][t]
+                                 <= (self.time_series.gt[t] + cap_c_imp * self.time_series.dt[t] / 3600.)
+                                 * (1 - self.variables['z_imp_lim'][t]))
 
-        # limit regular grid export power
+        # limit regular grid export power. The same cap would apply here, solar plus discharge to
+        # grid capacity, but on 013 it makes CBC land on a slightly worse schedule, so the export
+        # side keeps the global big-M until that is understood.
         if self.grid.p_max_exp is not None:
             for t in self.time_steps:
                 self.problem += self.variables['e'][t] <= self.grid.p_max_exp * self.time_series.dt[t] / 3600
