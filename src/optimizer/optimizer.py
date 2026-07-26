@@ -100,6 +100,11 @@ class Optimizer:
         # dictionary of optimizer variables
         self.variables = {}
 
+        # with a demand rate given, the grid import limit is the threshold beyond which the rate
+        # applies. Needed by the penalty scaling below as well as by the constraints and objective.
+        self.is_grid_demand_rate_active = (self.grid.p_max_imp is not None
+                                           and self.grid.prc_p_exc_imp is not None)
+
         # Compute scaling for strategy control parameters
         self.min_import_price = np.min(self.time_series.p_N)
         self.max_import_price = np.max(self.time_series.p_N)
@@ -109,19 +114,17 @@ class Optimizer:
         # any economic term in the model can command, so that the avoidance penalties below
         # (which are all multiples of penalty_base applied to Wh-denominated violations) stay
         # above real cost trade-offs regardless of the price data. Make sure it's always positive.
-        horizon_hours = sum(self.time_series.dt) / 3600.
         real_prices_per_wh = [
             self.max_import_price,
             self.max_export_price,
             *(bat.p_a for bat in self.batteries),
         ]
-        if self.grid.prc_p_exc_imp is not None and horizon_hours > 0:
-            # prc_p_exc_imp is currency/W, not currency/Wh like the terms above. The constraint
-            # e_imp_lim_exc[t] <= p_max_imp_exc * dt[t]/3600 (see _add_energy_balance_constraints)
-            # means 1 W of p_max_imp_exc unlocks dt[t]/3600 Wh of headroom at every time step, so
-            # summed over the horizon 1 W is worth horizon_hours Wh - dividing by that converts
-            # the demand rate into the same currency/Wh unit as the other terms.
-            real_prices_per_wh.append(self.grid.prc_p_exc_imp / horizon_hours)
+        if self.is_grid_demand_rate_active:
+            # prc_p_exc_imp is currency/W and the charge is set by the single worst time step, so
+            # 1 Wh kept out of the binding step is worth 3600/dt[t] W of it. Converting over the
+            # shortest step keeps the penalties above that incentive everywhere, converting over the
+            # horizon does not: a violation confined to one short step would outweigh them.
+            real_prices_per_wh.append(self.grid.prc_p_exc_imp * 3600. / min(self.time_series.dt))
         self.penalty_base = np.max(real_prices_per_wh + [0.1e-3])
 
         # scaling for penalty parameters
@@ -141,13 +144,6 @@ class Optimizer:
         # weight is the smaller one, so lowering the peak wins wherever the two disagree.
         self.prc_p_peak = self.penalty_base * 1e-3
         self.prc_p_ramp = self.penalty_base * 1e-5
-
-        # if there is a demand rate given in the input, the grid import limit will be interpreted as the
-        # threshold beyond wich the demand rate is to be applied. Compute a demand rate flag for use in the
-        # build constraint and build objective methods.
-        self.is_grid_demand_rate_active = False
-        if self.grid.p_max_imp is not None and self.grid.prc_p_exc_imp is not None:
-            self.is_grid_demand_rate_active = True
 
         # grid sides leveled by the active peak attenuation strategy, empty for all other strategies
         self.peak_sides = PEAK_STRATEGY_SIDES.get(strategy.charging_strategy, ())
