@@ -2,87 +2,77 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/evcc-io/optimizer.svg)](https://pkg.go.dev/github.com/evcc-io/optimizer)
 
+An HTTP service that plans the cheapest way to run a home energy system over the next hours or days.
+
+Given a PV forecast, the expected household demand, dynamic grid prices and a description of every battery in the house, it returns a per-time-step schedule: how much to import, how much to export, and how much to charge or discharge each battery. The problem is expressed as a Mixed Integer Linear Program and solved with CBC via [PuLP](https://github.com/coin-or/pulp).
+
 Inspired by https://github.com/Akkudoktor-EOS/EOS/pull/462
 
-### Example
+## What it does
 
-Request:
+- **Maximizes economic benefit** over the horizon: grid import cost, export revenue, and the value of the energy left in the batteries at the end.
+- **Handles many batteries at once** — home storage and EVs — each with its own capacity, power limits, priority and permission to charge from or discharge to the grid.
+- **Respects charging goals**: an EV can be required to reach a given state of charge by a given time step, or to charge at a minimum power while it is plugged in.
+- **Honours grid limits** for import and export power, and supports a demand rate charged on the highest power drawn beyond a threshold.
+- **Never returns "infeasible" for a goal it cannot reach.** Goals, minimum charge demand and grid limits are soft constraints backed by penalties, so an over-constrained request still yields the best achievable schedule plus a flag telling you which limit was violated.
+- **Optional strategies** break ties that cost nothing: charge before exporting, discharge before importing, or level grid peaks on the import side, the feed-in side, or both.
 
-```
-┌──────┬──────────┬──────────────┬──────────────────┬──────────────────┬────────────┐
-│ HOUR │ FORECAST │ TOTAL DEMAND │ GRID IMPORT COST │ GRID EXPORT COST │ BAT 0 GOAL │
-├──────┼──────────┼──────────────┼──────────────────┼──────────────────┼────────────┤
-│    1 │     2000 │         3000 │             0.30 │             0.15 │          - │
-│    2 │     6000 │         4000 │             0.25 │             0.12 │          - │
-│    3 │     8000 │         5000 │             0.20 │             0.10 │      40000 │
-│    4 │     7000 │         4500 │             0.22 │             0.11 │          - │
-│    5 │     4000 │         3500 │             0.28 │             0.14 │          - │
-│    6 │     1000 │         3000 │             0.32 │             0.16 │          - │
-└──────┴──────────┴──────────────┴──────────────────┴──────────────────┴────────────┘
-```
+## Example
 
-Response:
+One day, hourly steps: a 10 kWh home battery, an EV that must reach 40 kWh by 08:00, a 4 kWp PV forecast, and a dynamic tariff between 18 and 44 ct/kWh.
 
-```
-┌──────┬─────────────┬─────────────┬───────────┬───────────┬───────────┬───────────┬───────────┬───────────┐
-│ HOUR │ GRID IMPORT │ GRID EXPORT │ BAT 0 CHA │ BAT 0 DIS │ BAT 0 SOC │ BAT 1 CHA │ BAT 1 DIS │ BAT 1 SOC │
-├──────┼─────────────┼─────────────┼───────────┼───────────┼───────────┼───────────┼───────────┼───────────┤
-│    1 │        1516 │           - │      4316 │         - │     19100 │         - │      3800 │      1000 │
-│    2 │        9000 │           - │     11000 │         - │     29550 │         - │         - │      1000 │
-│    3 │       10216 │           - │     11000 │         - │     40000 │      2216 │        -0 │      3105 │
-│    4 │        7526 │           - │     10026 │         - │     49525 │         - │         - │      3105 │
-│    5 │           - │           - │       500 │         - │     50000 │         - │         - │      3105 │
-│    6 │           - │           - │         - │         - │     50000 │         - │      2000 │      1000 │
-└──────┴─────────────┴─────────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┘
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-input-dark.svg">
+  <img alt="Household demand, PV forecast and dynamic import tariff over 24 hours" src="docs/img/example-input-light.svg">
+</picture>
 
-Visualization:
+The optimizer buys all 29 kWh of grid energy in the three cheapest hours of the night, filling the EV to its goal by 04:00 — four hours early, because energy later is more expensive. Midday PV surplus goes into the home battery instead of the grid, since `charge_before_export` makes self-consumption the tie-breaker. The 44 ct evening peak is then covered entirely from storage: after 04:00 the house imports nothing at all.
 
-```
- 100.0 ┤                                                   ╭───────────────────────────────────────────────
-  91.2 ┤                                          ╭────────╯
-  82.5 ┤                                  ╭───────╯
-  73.8 ┤                         ╭────────╯
-  65.0 ┤                 ╭───────╯
-  56.2 ┤         ╭───────╯
-  47.5 ┤ ╭───────╯
-  38.8 ┼─╯                               ╭───────────────────────────────────────────────────╮
-  30.0 ┤                          ╭──────╯                                                   ╰─────╮
-  21.2 ┤                    ╭─────╯                                                                ╰──────╮
-  12.5 ┼────────────────────╯                                                                             ╰
-                                                 Optimization - SoC
-                                             ■ Bat 1 SoC   ■ Bat 2 SoC
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-result-dark.svg">
+  <img alt="Optimized grid exchange, battery power and state of charge over 24 hours" src="docs/img/example-result-light.svg">
+</picture>
 
-```
- 11000 ┤                  ╭──────────────────────────╮
- 10450 ┤                 ╭╯                   ╭╮     ╰──────────╮
-  9900 ┤               ╭─╯           ╭────────╯╰───╮            ╰───╮
-  9350 ┤              ╭╯     ╭───────╯             ╰───╮            ╰╮
-  8800 ┤            ╭─╯   ╭──╯                         ╰────╮        ╰╮
-  8250 ┤          ╭─╯    ╭╯                    ╭╮           ╰───╮     ╰╮
-  7700 ┤         ╭╯    ╭─╯               ╭─────╯╰─────────╮     ╰──╮   ╰╮
-  7150 ┤       ╭─╯    ╭╯            ╭────╯                ╰─────────╮╮  ╰╮
-  6600 ┤     ╭─╯    ╭─╯        ╭────╯                               ╰──╮ ╰─╮
-  6050 ┤    ╭╯     ╭╯     ╭────╯                                      ╰╰───╰╮
-  5500 ┤  ╭─╯    ╭─╯   ╭──╯                                             ╰╮ ╰╰╮─╮
-  4950 ┤ ╭╯     ╭╯   ╭─╯                                                 ╰╮  ╰╮╰──╮
-  4400 ┼─╯    ╭─╯ ╭──╯                                                    ╰─╮ ╰╮  ╰───╮
-  3850 ┼─╮   ╭╯╭──╯                                                         ╰╮ ╰╮     ╰───╮
-  3300 ┤ ╰──╮╭─╯                                                             ╰─╮╰╮        ╰──╮
-  2750 ┤  ╭─╰─╮                                                                ╰╮╰─╮         ╰───╮
-  2200 ┼──╯   ╰──╮                          ╭─────╮                             ╰─╮╰╮            ╰──╮     ╭
-  1650 ┼─╯       ╰──╮                   ╭───╯     ╰────╮                          ╰╮╰╮              ╭─────╯
-  1100 ┤            ╰──╮           ╭────╯              ╰────╮                      ╰─╰╮        ╭────╯   ╰──
-   550 ┤               ╰──╮   ╭────╯                        ╰───╮                    ╰╰──╭─────╯╮
-     0 ┼──────────────────╰──────────────────────────────────────────────────────────────╯─────────────────
-                                             Optimization - Power Flow
+## API
 
-        ■ Grid Import   ■ Grid Export   ■ Forecast   ■ Bat 1 Charge Power   ■ Bat 1 Discharge Power
-                                                     ■ Bat 2 Charge Power   ■ Bat 2 Discharge Power
+`POST /optimize/charge-schedule` takes the whole problem as one JSON document and returns the schedule. `GET /optimize/health` is the liveness probe. Every field is documented in [`openapi.yaml`](openapi.yaml).
+
+```jsonc
+{
+  "strategy": { "charging_strategy": "charge_before_export" },
+  "grid": { "p_max_exp": 7000 },                                             // W
+  "batteries": [
+    {
+      "s_capacity": 52000, "s_max": 50000, "s_min": 0, "s_initial": 12000,   // Wh
+      "c_min": 1380, "c_max": 11000, "d_max": 0,                             // W
+      "s_goal": [0, 0, 0, 0, 0, 0, 0, 40000, 0, 0, 0, 0],                    // Wh per step
+      "charge_from_grid": true,
+      "p_a": 0.00022                                     // value of stored energy, per Wh
+    }
+  ],
+  "time_series": {
+    "dt": [3600, 3600, 3600, 3600, 3600, 3600, 3600, 3600, 3600, 3600, 3600, 3600],
+    "gt": [230, 210, 205, 205, 240, 380, 780, 920, 640, 480, 430, 460],   // demand, Wh
+    "ft": [0, 0, 0, 0, 0, 60, 320, 850, 1600, 2500, 3300, 3900],          // PV forecast, Wh
+    "p_N": [0.00026, 0.00024, 0.00023, 0.00023, 0.00025, 0.00030,
+            0.00036, 0.00041, 0.00038, 0.00032, 0.00027, 0.00022],        // import, per Wh
+    "p_E": [0.00008, 0.00008, 0.00008, 0.00008, 0.00008, 0.00008,
+            0.00008, 0.00008, 0.00008, 0.00008, 0.00008, 0.00008]         // export, per Wh
+  }
+}
 ```
 
-### Development
+The response carries `status`, the `objective_value`, `grid_import` / `grid_export` per step, `charging_power` / `discharging_power` / `state_of_charge` per battery, and `limit_violations` together with the `grid_import_overshoot` and `grid_export_overshoot` series.
+
+Time steps do not have to be equally long: `dt` is given per step, so a schedule can be fine grained for the next hour and coarse for tomorrow.
+
+A small Go client for sending requests to a running service lives in [`cmd/client.go`](cmd/client.go); it prints the request, the resulting schedule and the objective value:
+
+```sh
+jq .request test_cases/024-attenuate-demand-peaks.json | go run ./cmd
+```
+
+## Development
 
 Optimizer relies on `uv` and `make` being available.
 Installation instructions for `uv` [can be found here](https://docs.astral.sh/uv/getting-started/installation/).
