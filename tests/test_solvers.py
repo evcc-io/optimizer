@@ -1,4 +1,5 @@
 import os
+import signal
 import time
 
 from optimizer.solvers import solver_wall, solvers_of
@@ -39,14 +40,14 @@ def test_a_solve_past_the_wall_loses_its_solver(tmp_path):
     with solver_wall(0.05, str(tmp_path), lambda pid, sig: killed.append((pid, sig))):
         time.sleep(0.2)
 
-    assert killed == [(40, 9)]
+    assert killed == [(40, signal.SIGKILL)]
 
 
 def test_a_solve_inside_the_wall_keeps_its_solver(tmp_path):
     fake_proc(tmp_path, 40, "cbc", os.getpid())
     killed = []
 
-    with solver_wall(5, str(tmp_path), lambda pid, sig: killed.append(pid)):
+    with solver_wall(5, str(tmp_path), lambda pid, sig: killed.append((pid, sig))):
         pass
     time.sleep(0.1)  # the timer would have to have been cancelled, not merely be pending
 
@@ -57,7 +58,7 @@ def test_no_limit_means_no_wall(tmp_path):
     fake_proc(tmp_path, 40, "cbc", os.getpid())
     killed = []
 
-    with solver_wall(None, str(tmp_path), lambda pid, sig: killed.append(pid)):
+    with solver_wall(None, str(tmp_path), lambda pid, sig: killed.append((pid, sig))):
         time.sleep(0.1)
 
     assert killed == []

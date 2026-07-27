@@ -601,10 +601,9 @@ class Optimizer:
         )
         with TemporaryDirectory() as tmpdir:
             solver.tmpDir = tmpdir
-            # CBC only tests -sec between branch and bound nodes, so presolve and the root
-            # LP can run past it. Twice the limit plus five seconds leaves an honest solve
-            # room to finish and stops a stuck one before it costs the worker its replica.
-            with solver_wall(time_limit and 2 * time_limit + 5):
+            # twice the limit plus five seconds leaves an honest solve room to finish and
+            # stops a stuck one before it costs the worker its replica
+            with solver_wall(2 * time_limit + 5 if time_limit else None):
                 self.problem.solve(solver)
 
         # Extract results

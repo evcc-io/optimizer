@@ -16,8 +16,8 @@ import threading
 from contextlib import contextmanager
 
 
-def solvers_of(ppid, proc="/proc", name="cbc"):
-    """PIDs of `name` processes whose parent is `ppid`.
+def solvers_of(ppid, proc="/proc"):
+    """PIDs of the cbc processes whose parent is `ppid`.
 
     The master runs as PID 1 in the container, so a solver whose worker is gone lands on
     it. A solver still owned by a live worker names that worker as its parent, which is
@@ -33,7 +33,7 @@ def solvers_of(ppid, proc="/proc", name="cbc"):
             continue
         try:
             with open(os.path.join(proc, entry, "comm")) as f:
-                if f.read().strip() != name:
+                if f.read().strip() != "cbc":
                     continue
             with open(os.path.join(proc, entry, "stat")) as f:
                 # comm sits in parens and may hold spaces, so split off the last ')' first.
@@ -48,7 +48,7 @@ def solvers_of(ppid, proc="/proc", name="cbc"):
 
 @contextmanager
 def solver_wall(seconds, proc="/proc", kill=os.kill):
-    """Kill this process's solvers if the block outlives `seconds`. Falsy seconds waits forever.
+    """Kill this process's solvers if the block outlives `seconds`. No seconds, no wall.
 
     PuLP raises when its solver dies, so the request fails at the wall instead of holding
     the worker until gunicorn kills that too.
