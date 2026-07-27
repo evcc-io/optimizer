@@ -456,17 +456,16 @@ class Optimizer:
                                  <= (self.time_series.gt[t] + cap_c_imp * self.time_series.dt[t] / 3600.)
                                  * (1 - self.variables['z_imp_lim'][t]))
 
-        # limit regular grid export power. The same cap would apply here, solar plus discharge to
-        # grid capacity, but on 013 it makes CBC land on a slightly worse schedule, so the export
-        # side keeps the global big-M until that is understood.
+        # limit regular grid export power. Mirror of the import side: the switch is capped at
+        # solar plus discharge to grid capacity, the most a step can put on the wire.
         if self.grid.p_max_exp is not None:
             for t in self.time_steps:
-                self.problem += self.variables['e'][t] <= self.grid.p_max_exp * self.time_series.dt[t] / 3600
-                self.problem += (self.grid.p_max_exp * self.time_series.dt[t] / 3600 - self.variables['e'][t]
-                                 <= self.grid.p_max_exp * self.time_series.dt[t] / 3600
-                                 * self.variables['z_exp_lim'][t])
+                lim = self.grid.p_max_exp * self.time_series.dt[t] / 3600
+                self.problem += self.variables['e'][t] <= lim
+                self.problem += (lim - self.variables['e'][t] <= lim * self.variables['z_exp_lim'][t])
                 self.problem += (self.variables['e_exp_lim_exc'][t]
-                                 <= self.M * (1 - self.variables['z_exp_lim'][t]))
+                                 <= (self.time_series.ft[t] + cap_d_exp * self.time_series.dt[t] / 3600.)
+                                 * (1 - self.variables['z_exp_lim'][t]))
 
         # track the horizon maximum and the step to step ramp of the total grid power for every side
         # the strategy levels. Both include the portion beyond p_max_imp / p_max_exp, so they stay
