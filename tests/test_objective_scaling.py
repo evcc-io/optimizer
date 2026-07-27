@@ -50,10 +50,11 @@ def solve_at(request, charging, scale):
     opt.OBJECTIVE_SCALE = scale
     try:
         model = build(request, charging)
-        # solved to proven optimality on both sides. The absolute gap lets either run stop up to a
-        # cent short, three orders above the difference this compares, so with it on the assert
-        # would measure where the search happened to stop rather than what scaling did.
+        # solved to proven optimality on both sides. Either gap lets a run stop short by far more
+        # than the difference this compares, so with one on the assert would measure where the
+        # search happened to stop rather than what scaling did.
         model.settings.gap_abs = None
+        model.settings.gap_rel = None
         assert model.solve()['status'] == 'Optimal'
         return pulp.value(model.problem.objective) / scale
     finally:
