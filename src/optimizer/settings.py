@@ -10,6 +10,12 @@ class OptimizerSettings(BaseSettings):
                                   description="Absolute MIP gap in currency units. The solver stops once the remaining "
                                               "gap is worth less than this, one cent by default. Unset solves to proven "
                                               "optimality")
+    gap_rel: float | None = Field(default=0.002,
+                                  description="Relative MIP gap as a fraction of the objective. The solver stops once "
+                                              "the remaining gap is worth less than this share of the bill, two per "
+                                              "mille by default. Whichever of the two gaps is reached first wins, so "
+                                              "this one governs large bills and gap_abs governs small ones. Unset "
+                                              "leaves the absolute gap as the only stopping rule")
     strategy_weight: float = Field(default=3.0,
                                    description="Multiplier on the cost neutral strategy terms. Raises them out of the "
                                                "solver's tolerance band so ties get decided instead of searched, see #114")

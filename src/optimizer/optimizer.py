@@ -632,15 +632,22 @@ class Optimizer:
             self.create_model()
 
         with TemporaryDirectory() as tmpdir:
-            # the absolute gap is in currency units, so it says "do not spend time on a difference
-            # worth less than this" instead of asking for proven optimality on a plateau of equal
-            # schedules. It bounds money only: the strategy terms are far smaller than any useful
-            # gap, so the tie breaking is left to their weight, not to where the search stops.
-            # the model handed to the solver is scaled by OBJECTIVE_SCALE, so the gap is too,
-            # otherwise a cent would read as a millionth of one.
+            # two stopping rules, whichever is reached first. The absolute gap is in currency units,
+            # so it says "do not spend time on a difference worth less than a cent" instead of asking
+            # for proven optimality on a plateau of equal schedules. The relative gap says the same
+            # thing as a share of the bill, which is what a cent stops being able to express once the
+            # bill is large: a request whose objective runs to tens of euro can sit a few cents from
+            # its bound for the whole time limit, having found the schedule it will return within the
+            # first second and spending the rest proving it.
+            # both bound money only. The strategy terms are far smaller than either gap, so the tie
+            # breaking is left to their weight, not to where the search stops.
+            # the model handed to the solver is scaled by OBJECTIVE_SCALE, so the absolute gap is too,
+            # otherwise a cent would read as a millionth of one. The relative gap is a ratio and
+            # therefore scale free.
             gap_abs = self.settings.gap_abs
             solver = pulp.PULP_CBC_CMD(msg=0, threads=self.settings.num_threads,
                                        timeLimit=self.settings.time_limit,
+                                       gapRel=self.settings.gap_rel,
                                        gapAbs=None if gap_abs is None else gap_abs * OBJECTIVE_SCALE)
             solver.tmpDir = tmpdir
             self.problem.solve(solver)
