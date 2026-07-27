@@ -75,13 +75,20 @@ COST_BOUND = 'cost_bound'
 # loss on every request and belongs as low as CBC allows. A hundredth of a cent, absolute and not
 # relative to the objective: penalties push the objective into the hundred thousands on a case
 # like 018-high-soc-initial, where a relative slack of 1e-7 would hand over 1.6 cents of real
-# money. Below 1e-5 the golden cases start coming back infeasible, which costs the tie break for
-# that request but no money, see the fallback in _solve_preferences.
+# money. Below 1e-5 the golden cases start coming back infeasible over a bound their own first
+# stage solution satisfies, 3 of 19 at 1e-7 and 13 of 19 at 1e-9. That costs the tie break for
+# those requests but no money, see the fallback in _solve_preferences.
 COST_BOUND_SLACK = 1e-5
 
-# relative gap for the second stage. It decides preferences, not money, so proving the last
-# fraction of a percent of a tie breaker is not worth the wall clock
-PREFERENCE_GAP_REL = 1e-4
+# how far below the bound the check in _solve_preferences still accepts a solution. CBC treats
+# that row like any other, so it may miss it by its feasibility tolerance: measured at 1.2e-5 on
+# 024-attenuate-demand-peaks, where rejecting over it threw away a tie break worth four times the
+# peak. A hundredth of a cent, three orders below the gap the cost stage may already leave.
+COST_BOUND_TOLERANCE = 1e-4
+
+# share of OPTIMIZER_TIME_LIMIT the tie break stage may use. The cost stage keeps the rest, so a
+# request that is hard on money still gets the money right and only loses part of the tie break
+PREFERENCE_TIME_SHARE = 0.25
 
 # grid energy variable and limit exceedance variable per leveled side
 PEAK_SIDE_VARIABLES = {
@@ -697,10 +704,17 @@ class Optimizer:
         if remaining is not None and remaining <= 0:
             self.preference_stage = 'no time'
             return
+        # deciding the tie to proven optimality is its own hard problem, as expensive as the cost
+        # optimum on the very requests this is meant to help, so it gets a slice of the clock
+        # rather than whatever is left of it. What it does not finish is still an improvement, see
+        # below, it just does not get to spend the whole budget on the last percent of it.
+        if remaining is not None:
+            remaining = min(remaining, self.settings.time_limit * PREFERENCE_TIME_SHARE)
 
         # what the first stage found, to fall back to and to bound the money by
         solution = {var: var.varValue for var in self.problem.variables()}
         cost = pulp.value(self.cost_objective)
+        undecided = pulp.value(self.preference_objective)
 
         # the preferences may spend preference_budget of real money and no more, plus the slack
         # the solver needs to consider its own first stage solution feasible. Stated in currency
@@ -716,19 +730,29 @@ class Optimizer:
         # in _setup_target_function was derived from, so reusing that one would hand the solver an
         # objective sitting at the bottom of its tolerance band
         self.problem.setObjective(self.preference_objective * objective_scale(self.preference_objective))
-        # presolve off: the cost bound is tight by construction and CBC's presolve declares the
-        # model infeasible over it, on 7 of the golden cases at the slack above. Little is lost,
-        # the first stage solution goes in as a warm start and the branching starts from there.
-        self.problem.solve(self._solver(tmpdir, timeLimit=remaining, warmStart=True,
-                                        presolve=False, gapRel=PREFERENCE_GAP_REL))
+        # no warm start, although the first stage solution is right there and feasible. The CBC
+        # binary pulp ships, 2.10.3 built Dec 2019, mishandles a MIP start on this model: it
+        # returns a strictly worse schedule and reports it as proven optimal, and it declares the
+        # model infeasible over a cost bound the start itself satisfies. Measured on one captured
+        # request, preference -0.806 warm against -0.610 cold, the cold value matching a single
+        # joint solve to the last digit. Upstream has fixed it, the same LP and the same start file
+        # come back identical to the cold run on CBC 2.10.13, so this can go once pulp ships a
+        # newer binary or the image installs its own. It buys nothing today, this stage is cheap.
+        self.problem.solve(self._solver(tmpdir, timeLimit=remaining))
 
-        # ponytail: anything short of Optimal falls back whole instead of picking the incumbent
-        # apart. A timed out second stage costs preference, never money.
+        # keep what came back if it is an improvement that respects the money, proven optimal or
+        # not: a tie break stopped by the clock still holds an incumbent, and the alternative is
+        # the first stage schedule, which is no tie break at all. Both conditions are checked here
+        # rather than read off the status, so a solver that reports the wrong one cannot spend
+        # money.
         self.preference_stage = pulp.LpStatus[self.problem.status]
-        if self.preference_stage != 'Optimal':
+        improved = (pulp.value(self.preference_objective) > undecided
+                    and pulp.value(self.cost_objective) >= cost - budget - COST_BOUND_TOLERANCE)
+        if not improved:
+            self.preference_stage += ', kept the first stage'
             for var, value in solution.items():
                 var.varValue = value
-            self.problem.status = pulp.LpStatusOptimal
+        self.problem.status = pulp.LpStatusOptimal
 
     def solve(self) -> Dict:
         """
