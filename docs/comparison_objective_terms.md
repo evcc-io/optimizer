@@ -26,7 +26,8 @@
   against the single-step case, which is the weaker of the two.
 - The tier 3 terms keyed off `min_import_price` invert sign when market prices go negative, the
   reason peak and ramp leveling use `penalty_base` instead.
-- Every tier 3 coefficient is multiplied by `OPTIMIZER_STRATEGY_WEIGHT` on top of the factors
-  listed, 3 by default. The scaled ranges above are at weight 1. The weight only moves tier 3, so
-  it changes the distance to tier 2 rather than the numeric range the solver works in.
+- Tier 3 is not solved together with the tiers above it. `solve()` maximizes tiers 1 and 2 first,
+  then maximizes tier 3 over the schedules that keep that value, so the distance between the tiers
+  no longer decides whether a preference is respected. The ranges listed above are what the second
+  stage works on, and it normalizes them off its own largest coefficient before solving.
 

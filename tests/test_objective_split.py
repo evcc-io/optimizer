@@ -3,13 +3,19 @@ import pathlib
 
 import numpy
 import pulp
+import pytest
 
-from optimizer.optimizer import OBJECTIVE_SCALE, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
+from optimizer.optimizer import COST_BOUND_SLACK, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
 
-CASE = 'test_cases/012-early-charging-not-perfect.json'
+# a plain case, one that leans on the priorities, and one that levels grid peaks. The last is the
+# one where the preferences are worth enough real money to be tempted to buy some
+CASES = ['012-early-charging-not-perfect',
+         '017-battery-charge-priotization-2',
+         '026-attenuate-grid-peaks']
 
 
-def build(request):
+def build(case):
+    request = json.loads(pathlib.Path(f'test_cases/{case}.json').read_text())['request']
     strategy_data = request.get('strategy', {})
     grid_data = request.get('grid', {})
     series = request['time_series']
@@ -32,31 +38,52 @@ def build(request):
         eta_c=request.get('eta_c', 0.95), eta_d=request.get('eta_d', 0.95), M=1e6)
 
 
-def test_objective_split_covers_the_whole_objective():
-    # the split must stay exhaustive: cost plus the weighted preferences has to equal what the
-    # model maximizes, otherwise the strategy weight would silently drop or double a term
-    request = json.loads(pathlib.Path(CASE).read_text())['request']
-    optimizer = build(request)
+def solve_cost_only(optimizer):
+    """First stage on its own, solved to proven optimality."""
+    optimizer.create_model()
+    optimizer.problem.setObjective(optimizer.cost_objective * optimizer.objective_scale)
+    optimizer.problem.solve(pulp.PULP_CBC_CMD(msg=0))
+    return optimizer
+
+
+@pytest.mark.parametrize('case', CASES)
+def test_objective_split_covers_the_whole_objective(case):
+    # the split must stay exhaustive: cost plus preferences has to equal what a single solve would
+    # maximize, otherwise a term would silently belong to neither stage
+    optimizer = build(case)
     optimizer.solve()
 
     combined = (pulp.value(optimizer.cost_objective)
-                + optimizer.settings.strategy_weight * pulp.value(optimizer.preference_objective)) * OBJECTIVE_SCALE
+                + pulp.value(optimizer.preference_objective)) * optimizer.objective_scale
     assert numpy.isclose(combined, pulp.value(optimizer.problem.objective), rtol=1e-9), \
         f'cost plus preference {combined}, model objective {pulp.value(optimizer.problem.objective)}'
 
 
-def test_strategy_weight_does_not_buy_preferences_with_money():
-    # the strategies are cost neutral by contract. Weighting them up must not move the economics,
-    # which is what breaks first if the weight is raised too far.
-    request = json.loads(pathlib.Path(CASE).read_text())['request']
+@pytest.mark.parametrize('case', CASES)
+def test_preferences_are_not_paid_for_with_money(case):
+    # the strategies are cost neutral by contract. The second stage may reorder a schedule but it
+    # may not buy a better tie break with real money, which is what the cost bound is there for.
+    optimizer = build(case)
+    assert optimizer.solve()['status'] == 'Optimal'
+    assert optimizer.preference_stage == 'Optimal', f'preference stage ended as {optimizer.preference_stage}'
 
-    costs = []
-    for weight in (1.0, 3.0):
-        optimizer = build(request)
-        optimizer.settings.strategy_weight = weight
-        assert optimizer.solve()['status'] == 'Optimal'
-        costs.append(pulp.value(optimizer.cost_objective))
+    # measured against what the cost stage had before the tie break ran, so the gap the cost stage
+    # is allowed to stop on does not enter. The slack is what _solve_preferences hands over, plus
+    # CBC's own feasibility tolerance, which it may violate that bound row by.
+    allowed = optimizer.settings.preference_budget + COST_BOUND_SLACK + 1e-6
+    assert pulp.value(optimizer.cost_objective) >= optimizer.cost_stage_value - allowed, \
+        f'cost after the tie break {pulp.value(optimizer.cost_objective)}, before {optimizer.cost_stage_value}'
 
-    plain, weighted = costs
-    assert numpy.isclose(weighted, plain, rtol=1e-6), \
-        f'weighted cost {weighted}, unweighted cost {plain}'
+
+@pytest.mark.parametrize('case', CASES)
+def test_preference_stage_decides_the_tie(case):
+    # what the second stage is for: the first stage is indifferent between the schedules it leaves
+    # equally priced, so its preference value is whatever the search happened to stop on. Deciding
+    # the tie afterwards has to be at least as good, and on these cases it is strictly better.
+    undecided = pulp.value(solve_cost_only(build(case)).preference_objective)
+
+    decided = build(case)
+    assert decided.solve()['status'] == 'Optimal'
+
+    assert pulp.value(decided.preference_objective) > undecided, \
+        f'preferences after the tie break {pulp.value(decided.preference_objective)}, before {undecided}'
