@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass
 from tempfile import TemporaryDirectory
 from typing import Dict, List, Optional
@@ -64,6 +65,23 @@ def objective_scale(objective) -> float:
         return 1.0
     return OBJECTIVE_TARGET / max(coefficients)
 
+
+# name of the constraint the second stage adds to keep the money the first stage found
+COST_BOUND = 'cost_bound'
+
+# slack on that constraint, so a preference budget of zero stays feasible against the solver's
+# own rounding rather than turning into an infeasible model. Whatever is granted here is spent:
+# the second stage is indifferent to money and drops straight to the bound, so this is a direct
+# loss on every request and belongs as low as CBC allows. A hundredth of a cent, absolute and not
+# relative to the objective: penalties push the objective into the hundred thousands on a case
+# like 018-high-soc-initial, where a relative slack of 1e-7 would hand over 1.6 cents of real
+# money. Below 1e-5 the golden cases start coming back infeasible, which costs the tie break for
+# that request but no money, see the fallback in _solve_preferences.
+COST_BOUND_SLACK = 1e-5
+
+# relative gap for the second stage. It decides preferences, not money, so proving the last
+# fraction of a percent of a tie breaker is not worth the wall clock
+PREFERENCE_GAP_REL = 1e-4
 
 # grid energy variable and limit exceedance variable per leveled side
 PEAK_SIDE_VARIABLES = {
@@ -137,6 +155,10 @@ class Optimizer:
         # objective split, filled by _setup_target_function: real money and preferences
         self.cost_objective = 0
         self.preference_objective = 0
+        # how the preference stage of the last solve() ended, and the money the cost stage had
+        # found before it ran. Everything below that value was given away deciding the tie.
+        self.preference_stage = None
+        self.cost_stage_value = None
         # dictionary of optimizer variables
         self.variables = {}
 
@@ -390,8 +412,8 @@ class Optimizer:
                 # decrease penalty slightly over time to push limit exceeding to late times
                 objective += - self.prc_e_grid_exp_pen * (1.0 - t * 1e-5) * self.variables['e_exp_lim_exc'][t]
 
-        # everything above is real money. Keep it separate from the preference terms below so
-        # solve() can optimize the two in sequence instead of in one near degenerate objective.
+        # everything above is real money. It is kept separate from the preference terms below
+        # because solve() optimizes the two in sequence, see _solve_preferences().
         self.cost_objective = objective
 
         #############################################################################
@@ -428,17 +450,13 @@ class Optimizer:
 
         self.preference_objective = preference
 
-        # The strategy terms are deliberately small. Scaling lifts the whole objective into a range
-        # the solver can resolve, but it lifts cost and preferences alike, so the preferences stay
-        # the same fraction of the cost they always were: on a flat tariff, where the cost optimum is
-        # a plateau of equally priced schedules, the search still walks that plateau instead of
-        # deciding the tie. The weight changes the ratio. It has to stay well below the smallest real
-        # price difference the model should still respect, so it is small on purpose: measured
-        # against the golden cases, 3 gives up nothing, 10 already costs 0.4 percent on 023 and 30
-        # costs 1.1 percent on 017.
-        weighted = objective + self.settings.strategy_weight * preference
-        self.objective_scale = objective_scale(weighted)
-        self.problem += weighted * self.objective_scale
+        # the objective a single solve would work on. solve() replaces it per stage and puts it
+        # back afterwards, so pulp.value(problem.objective) always reads the total worth of the
+        # solution no matter how it was reached. The scale is derived from this combined objective
+        # and reused by both stages, so the two stay comparable and the absolute gap keeps its
+        # meaning across them.
+        self.objective_scale = objective_scale(objective + preference)
+        self.problem += (objective + preference) * self.objective_scale
 
     def _add_energy_balance_constraints(self):
         """
@@ -657,6 +675,61 @@ class Optimizer:
                 self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
                                  * (1 - self.variables['z_cd'][i][t]))
 
+    def _solver(self, tmpdir, **options):
+        """CBC with the shared settings, writing its scratch files to tmpdir."""
+        solver = pulp.PULP_CBC_CMD(msg=0, threads=self.settings.num_threads, **options)
+        solver.tmpDir = tmpdir
+        return solver
+
+    def _solve_preferences(self, tmpdir, deadline) -> None:
+        """
+        Second stage: maximize the preferences over the schedules the first stage left equally
+        priced. The first stage solution stays as it is if this cannot improve on it.
+        """
+
+        # no preference terms means no strategy is configured, so there is nothing to decide and
+        # the first stage solution is already the answer
+        if not any(pulp.LpAffineExpression(self.preference_objective).values()):
+            self.preference_stage = 'none'
+            return
+
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
+            self.preference_stage = 'no time'
+            return
+
+        # what the first stage found, to fall back to and to bound the money by
+        solution = {var: var.varValue for var in self.problem.variables()}
+        cost = pulp.value(self.cost_objective)
+
+        # the preferences may spend preference_budget of real money and no more, plus the slack
+        # the solver needs to consider its own first stage solution feasible. Stated in currency
+        # rather than scaled: the row then carries the raw price coefficients instead of prices
+        # lifted by a million.
+        budget = self.settings.preference_budget + COST_BOUND_SLACK
+        if COST_BOUND not in self.problem.constraints:
+            self.problem += (self.cost_objective >= cost - budget, COST_BOUND)
+        else:
+            self.problem.constraints[COST_BOUND].constant = -(cost - budget)
+
+        # scaled in its own right: the preference terms are orders below the cost terms the factor
+        # in _setup_target_function was derived from, so reusing that one would hand the solver an
+        # objective sitting at the bottom of its tolerance band
+        self.problem.setObjective(self.preference_objective * objective_scale(self.preference_objective))
+        # presolve off: the cost bound is tight by construction and CBC's presolve declares the
+        # model infeasible over it, on 7 of the golden cases at the slack above. Little is lost,
+        # the first stage solution goes in as a warm start and the branching starts from there.
+        self.problem.solve(self._solver(tmpdir, timeLimit=remaining, warmStart=True,
+                                        presolve=False, gapRel=PREFERENCE_GAP_REL))
+
+        # ponytail: anything short of Optimal falls back whole instead of picking the incumbent
+        # apart. A timed out second stage costs preference, never money.
+        self.preference_stage = pulp.LpStatus[self.problem.status]
+        if self.preference_stage != 'Optimal':
+            for var, value in solution.items():
+                var.varValue = value
+            self.problem.status = pulp.LpStatusOptimal
+
     def solve(self) -> Dict:
         """
         Creates the MILP model if none exists and solves the optimization problem.
@@ -666,19 +739,30 @@ class Optimizer:
         if self.problem is None:
             self.create_model()
 
+        # both stages share one wall clock, so a second solve cannot double the response time
+        deadline = None if self.settings.time_limit is None else time.monotonic() + self.settings.time_limit
+
         with TemporaryDirectory() as tmpdir:
-            # the absolute gap is in currency units, so it says "do not spend time on a difference
-            # worth less than this" instead of asking for proven optimality on a plateau of equal
-            # schedules. It bounds money only: the strategy terms are far smaller than any useful
-            # gap, so the tie breaking is left to their weight, not to where the search stops.
-            # the model handed to the solver is scaled by OBJECTIVE_SCALE, so the gap is too,
-            # otherwise a cent would read as a millionth of one.
+            # first stage, real money only. The absolute gap is in currency units, so it says "do
+            # not spend time on a difference worth less than this" instead of asking for proven
+            # optimality on a plateau of equally priced schedules. Dropping the preferences here is
+            # what makes that safe: they are orders below any useful gap, so inside one objective
+            # the gap would swallow them and the tie would be decided by wherever the search
+            # stopped. The gap carries the model's own scale factor, otherwise a cent would reach
+            # the solver in whatever unit the scaling happened to land on.
             gap_abs = self.settings.gap_abs
-            solver = pulp.PULP_CBC_CMD(msg=0, threads=self.settings.num_threads,
-                                       timeLimit=self.settings.time_limit,
-                                       gapAbs=None if gap_abs is None else gap_abs * OBJECTIVE_SCALE)
-            solver.tmpDir = tmpdir
-            self.problem.solve(solver)
+            scale = self.objective_scale
+            self.problem.setObjective(self.cost_objective * scale)
+            self.problem.solve(self._solver(tmpdir, timeLimit=self.settings.time_limit,
+                                            gapAbs=None if gap_abs is None else gap_abs * scale))
+
+            # second stage, decide the tie between the schedules that cost the same money
+            if pulp.LpStatus[self.problem.status] == 'Optimal':
+                self.cost_stage_value = pulp.value(self.cost_objective)
+                self._solve_preferences(tmpdir, deadline)
+
+        # back to the total worth of the solution, neither stage objective on its own
+        self.problem.setObjective((self.cost_objective + self.preference_objective) * self.objective_scale)
 
         # Extract results.
         #
