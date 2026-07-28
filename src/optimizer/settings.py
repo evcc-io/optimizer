@@ -10,6 +10,10 @@ class OptimizerSettings(BaseSettings):
                                   description="Absolute MIP gap in currency units, applied to the cost stage. The solver "
                                               "stops once the remaining gap is worth less than this, one cent by default. "
                                               "Unset solves to proven optimality")
+    probe_seconds: float | None = Field(default=None,
+                                        description="Seconds the joint solve gets before falling back to the two "
+                                                    "stage split. Unset derives it from the time limit. Zero always "
+                                                    "splits, which is the behaviour before this became adaptive")
     preference_budget: float = Field(default=0.0,
                                      description="Real money the strategy stage may spend on preferences, in currency "
                                                  "units. Zero keeps the strategies cost neutral as documented, they then "

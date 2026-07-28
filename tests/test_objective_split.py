@@ -63,8 +63,12 @@ def test_objective_split_covers_the_whole_objective(case):
 def test_preferences_are_not_paid_for_with_money(case):
     # the strategies are cost neutral by contract. The second stage may reorder a schedule but it
     # may not buy a better tie break with real money, which is what the cost bound is there for.
+    # The probe is disabled so the split actually runs: these cases are small enough that the
+    # joint solve proves them outright, which is the point of the probe but not what this tests.
     optimizer = build(case)
+    optimizer.settings.probe_seconds = 0
     assert optimizer.solve()['status'] == 'Optimal'
+    assert optimizer.solve_path == 'split', f'took the {optimizer.solve_path} path'
     assert optimizer.preference_stage == 'Optimal', f'preference stage ended as {optimizer.preference_stage}'
 
     # measured against what the cost stage had before the tie break ran, so the gap the cost stage
@@ -83,7 +87,28 @@ def test_preference_stage_decides_the_tie(case):
     undecided = pulp.value(solve_cost_only(build(case)).preference_objective)
 
     decided = build(case)
+    decided.settings.probe_seconds = 0
     assert decided.solve()['status'] == 'Optimal'
 
     assert pulp.value(decided.preference_objective) > undecided, \
         f'preferences after the tie break {pulp.value(decided.preference_objective)}, before {undecided}'
+
+
+@pytest.mark.parametrize('case', CASES)
+def test_easy_requests_never_reach_the_split(case):
+    # the whole point of the probe: a model that proves optimality on the joint objective decided
+    # its own tie, in one solve, with no gap and no preference budget to give anything away. Every
+    # stored case is that shape, so none of them should be paying for a second solve.
+    optimizer = build(case)
+    assert optimizer.solve()['status'] == 'Optimal'
+    assert optimizer.solve_path == 'joint', f'took the {optimizer.solve_path} path'
+
+    # and it is the better answer. Compared on cost plus preference, which is what the model
+    # maximizes: the split can edge ahead on the preferences alone because its cost bound lets it
+    # spend COST_BOUND_SLACK buying them, so preferences on their own would score the wrong thing.
+    split = build(case)
+    split.settings.probe_seconds = 0
+    split.solve()
+    joint_total = pulp.value(optimizer.cost_objective) + pulp.value(optimizer.preference_objective)
+    split_total = pulp.value(split.cost_objective) + pulp.value(split.preference_objective)
+    assert joint_total >= split_total - 1e-9, f'joint {joint_total}, split {split_total}'

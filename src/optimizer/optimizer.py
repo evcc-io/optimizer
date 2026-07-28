@@ -1,3 +1,4 @@
+import shutil
 import time
 from dataclasses import dataclass
 from tempfile import TemporaryDirectory
@@ -86,9 +87,20 @@ COST_BOUND_SLACK = 1e-5
 # peak. A hundredth of a cent, three orders below the gap the cost stage may already leave.
 COST_BOUND_TOLERANCE = 1e-4
 
+# share of OPTIMIZER_TIME_LIMIT the probe gets before the solve falls back to the split. Kept well
+# under half: the probe is pure loss on a request that ends up splitting anyway, so it should be
+# long enough to catch the ordinary ones and no longer. Measured over the captured slow requests,
+# p95 on a joint solve lands near 1.5 s, so a fifth of a 10 s limit clears the ordinary traffic.
+PROBE_SHARE = 0.2
+
 # share of OPTIMIZER_TIME_LIMIT the tie break stage may use. The cost stage keeps the rest, so a
 # request that is hard on money still gets the money right and only loses part of the tie break
 PREFERENCE_TIME_SHARE = 0.25
+
+# a cbc on PATH is preferred over the one pulp bundles, which is 2.10.3 built Dec 2019 and gets a
+# MIP start wrong on this model, see _solve_preferences. None falls back to the bundled binary, so
+# a checkout without cbc installed still runs. The Dockerfile installs one.
+SYSTEM_CBC = shutil.which('cbc')
 
 # grid energy variable and limit exceedance variable per leveled side
 PEAK_SIDE_VARIABLES = {
@@ -166,6 +178,8 @@ class Optimizer:
         # found before it ran. Everything below that value was given away deciding the tie.
         self.preference_stage = None
         self.cost_stage_value = None
+        # 'joint' when the probe proved the whole objective, 'split' when it fell back
+        self.solve_path = None
         # dictionary of optimizer variables
         self.variables = {}
 
@@ -684,7 +698,12 @@ class Optimizer:
 
     def _solver(self, tmpdir, **options):
         """CBC with the shared settings, writing its scratch files to tmpdir."""
-        solver = pulp.PULP_CBC_CMD(msg=0, threads=self.settings.num_threads, **options)
+        # COIN_CMD is the same solver taking a path, PULP_CBC_CMD is it pinned to the bundled
+        # binary and refuses a path outright
+        if SYSTEM_CBC:
+            solver = pulp.COIN_CMD(path=SYSTEM_CBC, msg=0, threads=self.settings.num_threads, **options)
+        else:
+            solver = pulp.PULP_CBC_CMD(msg=0, threads=self.settings.num_threads, **options)
         solver.tmpDir = tmpdir
         return solver
 
@@ -754,6 +773,62 @@ class Optimizer:
                 var.varValue = value
         self.problem.status = pulp.LpStatusOptimal
 
+    def _probe_then_split(self, tmpdir, deadline) -> None:
+        """
+        Solve the whole objective if it can be proved quickly, otherwise fall back to the split.
+
+        Splitting the solve only pays on a degenerate plateau, and a request that proves the joint
+        objective never had one: it decided its own tie, in one solve, with no gap and no
+        preference budget to give anything away. That is a better answer than the split can
+        produce, and most requests reach it, so the split is reserved for the ones that would
+        otherwise run into the time limit.
+        """
+        probe = self.settings.probe_seconds
+        if probe is None and self.settings.time_limit is not None:
+            probe = self.settings.time_limit * PROBE_SHARE
+        if probe != 0:
+            self.problem.solve(self._solver(tmpdir, timeLimit=probe))
+
+        # sol_status, not status: pulp reports LpStatusOptimal whenever CBC came back with any
+        # feasible solution, including one it stopped on at the time limit. Measured on a captured
+        # request, a 2 s run and a 30 s run both said Optimal, with objectives of -682466848 and
+        # 59714881. Only LpSolutionOptimal means proven, which is what the probe is asking.
+        if probe != 0 and self.problem.sol_status == pulp.LpSolutionOptimal:
+            self.solve_path = 'joint'
+            self.cost_stage_value = pulp.value(self.cost_objective)
+            self.preference_stage = 'not needed'
+            return
+
+        # one of the hard ones. Money first with the absolute gap, which is what stops the plateau
+        # walk, then the tie break over the schedules money left equal. The gap is in currency
+        # units and carries the model's own scale factor, otherwise a cent would reach the solver
+        # in whatever unit the scaling happened to land on.
+        self.solve_path = 'split'
+        # whatever the probe reached is a feasible schedule. Keep it: the split now has less clock
+        # than it would have had alone, and on the hardest captured request that was the difference
+        # between a schedule and no answer at all.
+        fallback = ({var: var.varValue for var in self.problem.variables()}
+                    if self.problem.sol_status in (pulp.LpSolutionOptimal,
+                                                   pulp.LpSolutionIntegerFeasible) else None)
+
+        gap_abs = self.settings.gap_abs
+        scale = self.objective_scale
+        self.problem.setObjective(self.cost_objective * scale)
+        remaining = None if deadline is None else max(deadline - time.monotonic(), 0.1)
+        self.problem.solve(self._solver(tmpdir, timeLimit=remaining,
+                                        gapAbs=None if gap_abs is None else gap_abs * scale))
+
+        if pulp.LpStatus[self.problem.status] == 'Optimal':
+            # the cost stage is allowed to stop on its gap, so LpSolutionOptimal is not required of
+            # it, only that it produced something to break ties over
+            self.cost_stage_value = pulp.value(self.cost_objective)
+            self._solve_preferences(tmpdir, deadline)
+        elif fallback:
+            self.solve_path = 'split, kept the probe'
+            for var, value in fallback.items():
+                var.varValue = value
+            self.problem.status = pulp.LpStatusOptimal
+
     def solve(self) -> Dict:
         """
         Creates the MILP model if none exists and solves the optimization problem.
@@ -767,23 +842,7 @@ class Optimizer:
         deadline = None if self.settings.time_limit is None else time.monotonic() + self.settings.time_limit
 
         with TemporaryDirectory() as tmpdir:
-            # first stage, real money only. The absolute gap is in currency units, so it says "do
-            # not spend time on a difference worth less than this" instead of asking for proven
-            # optimality on a plateau of equally priced schedules. Dropping the preferences here is
-            # what makes that safe: they are orders below any useful gap, so inside one objective
-            # the gap would swallow them and the tie would be decided by wherever the search
-            # stopped. The gap carries the model's own scale factor, otherwise a cent would reach
-            # the solver in whatever unit the scaling happened to land on.
-            gap_abs = self.settings.gap_abs
-            scale = self.objective_scale
-            self.problem.setObjective(self.cost_objective * scale)
-            self.problem.solve(self._solver(tmpdir, timeLimit=self.settings.time_limit,
-                                            gapAbs=None if gap_abs is None else gap_abs * scale))
-
-            # second stage, decide the tie between the schedules that cost the same money
-            if pulp.LpStatus[self.problem.status] == 'Optimal':
-                self.cost_stage_value = pulp.value(self.cost_objective)
-                self._solve_preferences(tmpdir, deadline)
+            self._probe_then_split(tmpdir, deadline)
 
         # back to the total worth of the solution, neither stage objective on its own
         self.problem.setObjective((self.cost_objective + self.preference_objective) * self.objective_scale)
