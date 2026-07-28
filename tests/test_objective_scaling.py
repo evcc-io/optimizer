@@ -1,11 +1,12 @@
 import json
 import pathlib
 
+import numpy
 import pulp
 import pytest
 
 from optimizer import optimizer as opt
-from optimizer.optimizer import OBJECTIVE_SCALE, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
+from optimizer.optimizer import BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
 
 # one case per shape the scaling has to survive: a plain one, one that leans on the peak
 # strategies, and one that hits a grid limit and therefore carries penalty terms
@@ -14,11 +15,16 @@ CASES = ['012-early-charging-not-perfect',
          '021-min-pv-use-case-with-weird-behavior']
 STRATEGIES = ['none', 'charge_before_export', 'attenuate_grid_peaks']
 
+# the placement assertion is cheap, it only builds the model, so it runs over every stored case.
+# They span three orders in the largest raw coefficient, from 1.6e-1 where market prices go
+# negative to 3e2 on the peak levelling ones, the spread a single fixed factor has to cover.
+ALL_CASES = sorted(p.stem for p in pathlib.Path('test_cases').glob('*.json'))
+
 # how far below the unscaled result the scaled one may land before it counts as a loss. The two
 # are separate CBC runs and CBC converges to about 1e-7 in objective units, so anything tighter
 # than that measures the solver's own noise floor instead of the change: on linux the runs sit
-# 4e-9 apart on 019 with no strategy. A part per million is still three orders below the moves
-# this is meant to catch, the smallest of which is the 0.4 percent in the strategy weight table.
+# 4e-9 apart on 019 with no strategy. A part per million is still orders below the moves this is
+# meant to catch, which are the percent scale losses scaling was introduced to prevent.
 TOLERANCE = 1e-6
 
 
@@ -45,13 +51,13 @@ def build(request, charging):
 
 
 def solve_at(request, charging, scale):
-    """Solve at a given OBJECTIVE_SCALE and return the objective back in its original unit."""
+    """Solve at a fixed OBJECTIVE_SCALE, or at the derived one for None, in the original unit."""
     original = opt.OBJECTIVE_SCALE
     opt.OBJECTIVE_SCALE = scale
     try:
         model = build(request, charging)
         assert model.solve()['status'] == 'Optimal'
-        return pulp.value(model.problem.objective) / scale
+        return pulp.value(model.problem.objective) / model.objective_scale
     finally:
         opt.OBJECTIVE_SCALE = original
 
@@ -70,7 +76,24 @@ def test_scaling_never_costs_objective_value(case, charging):
     request = json.loads(pathlib.Path(f'test_cases/{case}.json').read_text())['request']
 
     plain = solve_at(request, charging, 1.0)
-    scaled = solve_at(request, charging, OBJECTIVE_SCALE)
+    scaled = solve_at(request, charging, None)
 
     assert scaled >= plain - abs(plain) * TOLERANCE, \
-        f'objective at scale {OBJECTIVE_SCALE:g}: {scaled}, unscaled: {plain}'
+        f'objective at the derived scale: {scaled}, unscaled: {plain}'
+
+
+@pytest.mark.parametrize('case', ALL_CASES)
+@pytest.mark.parametrize('charging', STRATEGIES)
+def test_derived_scale_places_the_largest_coefficient(case, charging):
+    # what the derived factor is for, and the assertion a fixed one cannot carry: whatever the
+    # request's prices and penalty base are, the model the solver receives is handed over in the
+    # same numeric window. With a fixed 1e6 the largest coefficient lands anywhere over three
+    # orders, up to 3e8 on the peak levelling cases.
+    request = json.loads(pathlib.Path(f'test_cases/{case}.json').read_text())['request']
+    model = build(request, charging)
+    model.create_model()
+
+    largest = max(abs(c) for c in model.problem.objective.values() if c)
+
+    assert numpy.isclose(largest, opt.OBJECTIVE_TARGET, rtol=1e-9), \
+        f'largest coefficient {largest:g}, target {opt.OBJECTIVE_TARGET:g}'
