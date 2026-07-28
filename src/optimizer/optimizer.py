@@ -22,13 +22,41 @@ PEAK_STRATEGY_SIDES = {
     'attenuate_grid_peaks': ('imp', 'exp'),
 }
 
-# factor the assembled objective is multiplied by before the model goes to the solver. CBC judges
-# improvements against absolute tolerances (~1e-7), and with prices given per Wh the raw objective
-# coefficients land close to that bound, so real improvements get pruned as numerical noise.
-# Scaling does not change the argmax, it only lifts the coefficients into a range the solver can
-# resolve. The reported objective value is recalculated from the solution and stays in its
-# original unit.
-OBJECTIVE_SCALE = 1e6
+# magnitude the largest objective coefficient is placed at before the model goes to the solver.
+# CBC judges improvements against absolute tolerances (~1e-7), and with prices given per Wh the
+# raw coefficients land close to that bound, so real improvements get pruned as numerical noise.
+# Scaling does not change the argmax, it only moves the window. The reported objective value is
+# recalculated from the solution and stays in its original unit.
+OBJECTIVE_TARGET = 1e6
+
+# fixed factor to use instead of deriving one from the coefficients. None derives it, which is the
+# production setting; the tests pin it to compare two scalings of the same model.
+OBJECTIVE_SCALE = None
+
+
+def objective_scale(objective) -> float:
+    """
+    Factor that puts the largest objective coefficient at OBJECTIVE_TARGET.
+
+    Derived from the coefficients rather than fixed, because their magnitude is set by the request:
+    prices per Wh, a demand rate per W, the penalty base they scale from. Across the stored cases
+    the largest coefficient moves by three orders, from 1.6e-1 where market prices go negative to
+    3e2 on the peak levelling ones, so a single constant lands the same model anywhere in that
+    range and a fixed 1e6 pushes six of nineteen past 1e6 in the model handed to the solver.
+
+    Anchored on the largest coefficient and not on the smallest: the smallest is a strategy tie
+    breaker, deliberately tiny, and aiming that one at a floor drags the whole objective down with
+    it. Measured, that costs 3 requests of 335 their solution and runs others three times past the
+    time limit, because the objective ends up orders below a constraint matrix that carries a big M
+    of 1e6. The span within a model is up to 1e8 and no single factor can fix that, only the model.
+    """
+    if OBJECTIVE_SCALE is not None:
+        return OBJECTIVE_SCALE
+    coefficients = [abs(c) for c in pulp.LpAffineExpression(objective).values() if c]
+    if not coefficients:
+        return 1.0
+    return OBJECTIVE_TARGET / max(coefficients)
+
 
 # grid energy variable and limit exceedance variable per leveled side
 PEAK_SIDE_VARIABLES = {
@@ -97,6 +125,8 @@ class Optimizer:
         self.time_steps = range(self.T)
         # the optimization problem
         self.problem = None
+        # factor the objective went to the solver with, set by _setup_target_function
+        self.objective_scale = None
         # dictionary of optimizer variables
         self.variables = {}
 
@@ -386,7 +416,8 @@ class Optimizer:
                 objective += self.variables['c'][i][t] * self.min_import_price * 5e-5 * (self.T - t) * bat.c_priority
                 objective += self.variables['d'][i][t] * self.min_import_price * 5e-5 * (self.T - t) * bat.c_priority
 
-        self.problem += objective * OBJECTIVE_SCALE
+        self.objective_scale = objective_scale(objective)
+        self.problem += objective * self.objective_scale
 
     def _add_energy_balance_constraints(self):
         """
