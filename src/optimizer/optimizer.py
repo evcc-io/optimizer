@@ -654,8 +654,17 @@ class Optimizer:
             solver.tmpDir = tmpdir
             self.problem.solve(solver)
 
-        # Extract results
+        # Extract results.
+        #
+        # pulp reports LpStatusOptimal whenever CBC came back with any feasible solution, including
+        # one it stopped on at the time limit, so status alone cannot tell a proved schedule from a
+        # truncated one. Measured on a captured request, a 2 s run and a 30 s run both said Optimal
+        # with objective values of -682466848 and 59714881. sol_status carries the distinction and
+        # is folded into the reported status here rather than exposed as a second field: callers
+        # already branch on this one, and 'Optimal' claiming more than it can back is the bug.
         status = pulp.LpStatus[self.problem.status]
+        if status == 'Optimal' and self.problem.sol_status != pulp.LpSolutionOptimal:
+            status = 'Feasible'
 
         # grid import and export if no demand rate is active
         # if a limit is set and exceeded, this is the part that is actually imported / exported.
@@ -681,7 +690,9 @@ class Optimizer:
             grid_exp_limit_hit = (np.max([pulp.value(var) for var in self.variables['e_exp_lim_exc']]) > 0)
             e_grid_exp_overshoot = [pulp.value(var) for var in self.variables['e_exp_lim_exc']]
 
-        if status == 'Optimal':
+        # a Feasible solve carries a full schedule, it just is not proved, so it is returned like
+        # an optimal one. Only the label changes.
+        if status in ('Optimal', 'Feasible'):
             result = {
                 'status': status,
                 'objective_value': self.get_clean_objective_value(),
