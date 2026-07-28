@@ -4,6 +4,7 @@ import pathlib
 
 import jwt
 import numpy
+import pulp
 import pytest
 
 from optimizer.app import app, settings
@@ -79,6 +80,38 @@ def test_subject_logging_is_configurable(capsys, monkeypatch):
     monkeypatch.setattr(settings, "log_subject", True)
     client.post("/optimize/charge-schedule", json={}, headers=headers)
     assert "subject: someone" in capsys.readouterr().out
+
+
+def test_unproved_solutions_report_feasible(monkeypatch):
+    # A solve cut off by the clock still returns a full schedule, but it is not the proved optimum
+    # and must not claim to be. pulp sets LpStatusOptimal either way, so the distinction comes from
+    # sol_status: on one captured request a 2 s and a 30 s run both reported Optimal, with
+    # objective values of -682466848 and 59714881.
+    #
+    # The truncation is simulated rather than provoked with a small time limit, because CBC's -sec
+    # is not a wall clock -- it is only tested between branch and bound nodes, so every stored case
+    # finishes and proves itself no matter how low the limit goes. 020 takes 0.98 s at a limit of
+    # 0.01. What is under test here is the mapping and that the payload survives it, not CBC.
+    original = pulp.LpProblem.solve
+
+    def stopped_on_time(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
+        self.sol_status = pulp.LpSolutionIntegerFeasible
+        return result
+
+    request = json.loads(pathlib.Path('test_cases/012-early-charging-not-perfect.json').read_text())["request"]
+    client = app.test_client()
+
+    assert client.post("/optimize/charge-schedule", json=request).json["status"] == "Optimal"
+
+    monkeypatch.setattr(pulp.LpProblem, "solve", stopped_on_time)
+    body = client.post("/optimize/charge-schedule", json=request).json
+
+    assert body["status"] == "Feasible", f'reported {body["status"]}'
+    # and the caller still gets a usable answer, not an empty one
+    assert body["objective_value"] is not None
+    assert len(body["batteries"][0]["charging_power"]) == len(request["time_series"]["dt"])
+    assert len(body["grid_import"]) == len(request["time_series"]["dt"])
 
 
 def test_slow_requests_are_dumped(tmp_path, monkeypatch):

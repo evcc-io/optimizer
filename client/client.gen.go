@@ -22,6 +22,7 @@ const (
 
 // Defines values for OptimizationResultStatus.
 const (
+	Feasible   OptimizationResultStatus = "Feasible"
 	Infeasible OptimizationResultStatus = "Infeasible"
 	NotSolved  OptimizationResultStatus = "Not Solved"
 	Optimal    OptimizationResultStatus = "Optimal"
@@ -174,11 +175,16 @@ type OptimizationResult struct {
 	GridImportOvershoot []float32            `json:"grid_import_overshoot,omitempty"`
 	LimitViolations     LimitViolationResult `json:"limit_violations,omitempty"`
 
-	// ObjectiveValue Optimal objective function value (economic benefit in currency units). Null if not optimal.
+	// ObjectiveValue Objective function value (economic benefit in currency units). Present for Optimal and
+	// Feasible, null otherwise.
 	ObjectiveValue float32 `json:"objective_value"`
 
 	// Status Optimization solver status:
-	// - Optimal: Problem solved to optimality
+	// - Optimal: Problem solved to proven optimality
+	// - Feasible: A schedule was found but the solver stopped before proving it optimal,
+	//   normally because it reached OPTIMIZER_TIME_LIMIT. The response carries a complete,
+	//   usable schedule, the same shape as Optimal; it is simply not proved to be the best
+	//   one. Treat it as usable.
 	// - Infeasible: No feasible solution exists
 	// - Unbounded: Objective function is unbounded
 	// - Undefined: Problem status is undefined
@@ -190,11 +196,15 @@ type OptimizationResult struct {
 type OptimizationResultFlowDirection int
 
 // OptimizationResultStatus Optimization solver status:
-// - Optimal: Problem solved to optimality
-// - Infeasible: No feasible solution exists
-// - Unbounded: Objective function is unbounded
-// - Undefined: Problem status is undefined
-// - Not Solved: Problem was not solved
+//   - Optimal: Problem solved to proven optimality
+//   - Feasible: A schedule was found but the solver stopped before proving it optimal,
+//     normally because it reached OPTIMIZER_TIME_LIMIT. The response carries a complete,
+//     usable schedule, the same shape as Optimal; it is simply not proved to be the best
+//     one. Treat it as usable.
+//   - Infeasible: No feasible solution exists
+//   - Unbounded: Objective function is unbounded
+//   - Undefined: Problem status is undefined
+//   - Not Solved: Problem was not solved
 type OptimizationResultStatus string
 
 // OptimizerStrategy defines model for OptimizerStrategy.
