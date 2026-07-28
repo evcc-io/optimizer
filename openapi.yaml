@@ -394,10 +394,14 @@ components:
       properties:
         status:
           type: string
-          enum: [Optimal, Infeasible, Unbounded, Undefined, Not Solved]
+          enum: [Optimal, Feasible, Infeasible, Unbounded, Undefined, Not Solved]
           description: |
             Optimization solver status:
-            - Optimal: Problem solved to optimality
+            - Optimal: Problem solved to proven optimality
+            - Feasible: A schedule was found but the solver stopped before proving it optimal,
+              normally because it reached OPTIMIZER_TIME_LIMIT. The response carries a complete,
+              usable schedule, the same shape as Optimal; it is simply not proved to be the best
+              one. Treat it as usable.
             - Infeasible: No feasible solution exists
             - Unbounded: Objective function is unbounded
             - Undefined: Problem status is undefined
@@ -406,7 +410,9 @@ components:
         objective_value:
           type: number
           nullable: true
-          description: Optimal objective function value (economic benefit in currency units). Null if not optimal.
+          description: |
+            Objective function value (economic benefit in currency units). Present for Optimal and
+            Feasible, null otherwise.
           example: 1250.75
         limit_violations:
           type: object
