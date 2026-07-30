@@ -180,6 +180,10 @@ class Optimizer:
         # weight, so leveling decides wherever the two disagree and this only picks between the
         # schedules leveling rates equal.
         self.prc_e_early = self.penalty_base * 1e-7
+        # same tie break for the demand side: a battery charging purely from the grid, with no
+        # surplus to hold back, gets nothing from prc_e_early above. Same weight, mirrored onto
+        # import instead of export.
+        self.prc_n_early = self.penalty_base * 1e-7
 
         # grid sides leveled by the active peak attenuation strategy, empty for all other strategies
         self.peak_sides = PEAK_STRATEGY_SIDES.get(strategy.charging_strategy, ())
@@ -419,6 +423,14 @@ class Optimizer:
         if self.peak_sides:
             for t in self.time_steps:
                 objective += - self.variables['e'][t] * self.prc_e_early * (self.T - t) / self.T
+
+        # same tie break for a battery with no surplus to hold back: charging is the only
+        # flexible part of grid import (household demand gt is fixed per step), so penalizing
+        # import that lands late has the same effect on the import side that deferring export
+        # has on the feed-in side above.
+        if self.peak_sides:
+            for t in self.time_steps:
+                objective += - self.variables['n'][t] * self.prc_n_early * t / self.T
 
         # prefer discharging batteries completely before importing from grid
         if self.strategy.discharging_strategy == 'discharge_before_import':

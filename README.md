@@ -44,7 +44,7 @@ Cheapest is not always kindest to the grid connection. The same house on a *flat
   <img alt="Grid exchange over 24 hours without a strategy and with attenuate_grid_peaks, showing the import peak dropping from 11.5 kW to 3.6 kW" src="docs/img/example-peak-light.svg">
 </picture>
 
-A cap and a ramp limit say how high the grid profile may go, not when the batteries fill, and on a flat tariff nothing else decides it either. The peak strategies therefore hold the surplus back from the grid the same way `charge_before_export` does, so that a levelled day still charges first and exports afterwards. The weight is two orders below the ramp, so it only picks between schedules the levelling rates equal — where the two disagree, as on the feed-in side below, levelling keeps the last word.
+A cap and a ramp limit say how high the grid profile may go, not when the batteries fill, and on a flat tariff nothing else decides it either. The peak strategies therefore hold the surplus back from the grid the same way `charge_before_export` does, so that a levelled day still charges first and exports afterwards, and pull grid import forward for a battery that has no surplus to hold back. Both weights are two orders below the ramp, so they only pick between schedules the levelling rates equal — where the two disagree, as on the feed-in side below, levelling keeps the last word.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-early-dark.svg">
