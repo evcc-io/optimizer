@@ -221,12 +221,6 @@ class Optimizer:
         self.prc_p_peak = self.penalty_base * 1e-3
         self.prc_p_ramp = self.penalty_base * 1e-5
 
-        # weight the peak leveling strategies defer grid export at, so that a leveled profile
-        # still fills the batteries before it sends the surplus out. Two orders below the ramp
-        # weight, so leveling decides wherever the two disagree and this only picks between the
-        # schedules leveling rates equal.
-        self.prc_e_early = self.penalty_base * 1e-7
-
         # grid sides leveled by the active peak attenuation strategy, empty for all other strategies
         self.peak_sides = PEAK_STRATEGY_SIDES.get(strategy.charging_strategy, ())
 
@@ -460,16 +454,6 @@ class Optimizer:
         for side in self.peak_sides:
             preference += - self.variables[f'p_{side}_peak'] * self.prc_p_peak
             preference += - pulp.lpSum(self.variables[f'p_{side}_ramp']) * self.prc_p_ramp
-
-        # peak and ramp say how high the grid profile may go, not when the batteries fill, and
-        # under flat commercials that leaves most of the horizon undecided: the schedule then comes
-        # back as arbitrary as with no strategy at all, with the stored examples charging in the
-        # last third of the day. So the peak strategies defer export as well, the same tie break
-        # charge_before_export makes, at prc_e_early instead of its weight so that leveling keeps
-        # the last word.
-        if self.peak_sides:
-            for t in self.time_steps:
-                preference += - self.variables['e'][t] * self.prc_e_early * (self.T - t) / self.T
 
         # prefer discharging batteries completely before importing from grid
         if self.strategy.discharging_strategy == 'discharge_before_import':
