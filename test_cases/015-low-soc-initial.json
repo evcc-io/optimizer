@@ -15,7 +15,8 @@
         "eta_c": 0.9,
         "eta_d": 0.9,
         "strategy": {
-            "charging_strategy": "charge_before_export",
+            "charging_strategy": "none",
+            "battery_first": true,
             "discharging_strategy": "discharge_before_import"
         },
         "time_series": {

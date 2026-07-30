@@ -487,7 +487,8 @@
     "eta_d": 0.9,
     "grid": {},
     "strategy": {
-      "charging_strategy": "charge_before_export"
+      "charging_strategy": "none",
+      "battery_first": true
     },
     "time_series": {
       "dt": [

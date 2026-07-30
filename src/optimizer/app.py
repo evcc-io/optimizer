@@ -92,7 +92,9 @@ ns = api.namespace('optimize', description='EV Charging Optimization Operations'
 # Input models for API documentation
 strategy_model = api.model('OptimizationStrategy', {
     'charging_strategy': fields.String(required=False, description='Sets a strategy for charging in situations where choices are cost neutral.'),
-    'discharging_strategy': fields.String(required=False, description='Sets a strategy for discharging in situations where choices are cost neutral.')
+    'discharging_strategy': fields.String(required=False, description='Sets a strategy for discharging in situations where choices are cost neutral.'),
+    'battery_first': fields.Boolean(required=False, description='Fill the batteries as early as possible. '
+                                    'Combines with any charging_strategy; attenuation keeps priority.')
 })
 
 grid_model = api.model('GridConfig', {
@@ -177,7 +179,8 @@ class OptimizeCharging(Resource):
             strat_data = data.get('strategy', {})
             strategy = OptimizationStrategy(
                 charging_strategy=strat_data.get('charging_strategy', 'none'),
-                discharging_strategy=strat_data.get('discharging_strategy', 'none')
+                discharging_strategy=strat_data.get('discharging_strategy', 'none'),
+                battery_first=strat_data.get('battery_first', False)
             )
 
             # parse grid configuration

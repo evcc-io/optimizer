@@ -35,7 +35,6 @@ const (
 	OptimizerStrategyChargingStrategyAttenuateDemandPeaks OptimizerStrategyChargingStrategy = "attenuate_demand_peaks"
 	OptimizerStrategyChargingStrategyAttenuateFeedinPeaks OptimizerStrategyChargingStrategy = "attenuate_feedin_peaks"
 	OptimizerStrategyChargingStrategyAttenuateGridPeaks   OptimizerStrategyChargingStrategy = "attenuate_grid_peaks"
-	OptimizerStrategyChargingStrategyChargeBeforeExport   OptimizerStrategyChargingStrategy = "charge_before_export"
 	OptimizerStrategyChargingStrategyNone                 OptimizerStrategyChargingStrategy = "none"
 )
 
@@ -209,9 +208,14 @@ type OptimizationResultStatus string
 
 // OptimizerStrategy defines model for OptimizerStrategy.
 type OptimizerStrategy struct {
-	// ChargingStrategy Sets a strategy for charging in situations where choices are cost neutral.
-	// - none (default): no strategy set
-	// - charge_before_export: charge batteries before exporting to grid
+	// BatteryFirst Fill the batteries as early as the rest of the model allows, holding the surplus back
+	// from the grid until they have taken it. Orthogonal to charging_strategy, so it combines
+	// with any of them; where the two disagree, attenuation keeps priority and the profile
+	// being levelled is the one that survives.
+	BatteryFirst bool `json:"battery_first,omitempty"`
+
+	// ChargingStrategy Selects what to shape about the grid profile, in situations where choices are cost neutral.
+	// - none (default): no profile shaping
 	// - attenuate_demand_peaks: level the grid import profile, charging at partial power over several time steps instead of one peak
 	// - attenuate_feedin_peaks: level the grid export profile, charging to shave solar feed-in peaks
 	// - attenuate_grid_peaks: level both the grid import and the grid export profile
@@ -223,9 +227,8 @@ type OptimizerStrategy struct {
 	DischargingStrategy OptimizerStrategyDischargingStrategy `json:"discharging_strategy,omitempty"`
 }
 
-// OptimizerStrategyChargingStrategy Sets a strategy for charging in situations where choices are cost neutral.
-// - none (default): no strategy set
-// - charge_before_export: charge batteries before exporting to grid
+// OptimizerStrategyChargingStrategy Selects what to shape about the grid profile, in situations where choices are cost neutral.
+// - none (default): no profile shaping
 // - attenuate_demand_peaks: level the grid import profile, charging at partial power over several time steps instead of one peak
 // - attenuate_feedin_peaks: level the grid export profile, charging to shave solar feed-in peaks
 // - attenuate_grid_peaks: level both the grid import and the grid export profile
