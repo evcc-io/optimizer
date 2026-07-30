@@ -45,6 +45,24 @@ def build_grid_only(charging_strategy):
         eta_c=1.0, eta_d=1.0, M=1e6)
 
 
+def build_mixed(charging_strategy):
+    """
+    Early solar covering half the room, the rest to come from the grid: the only case where the
+    two sides pull against each other, because charging the whole battery early needs import that
+    a leveled import profile spreads out.
+    """
+    return Optimizer(
+        strategy=OptimizationStrategy(charging_strategy=charging_strategy, discharging_strategy='none'),
+        grid=GridConfig(p_max_imp=None, p_max_exp=None, prc_p_exc_imp=None),
+        batteries=[BatteryConfig(charge_from_grid=True, discharge_to_grid=False,
+                                 s_capacity=20000, s_min=0, s_max=8000, s_initial=0,
+                                 c_min=0, c_max=SURPLUS, d_max=0, p_a=P_A)],
+        time_series=TimeSeriesData(dt=[3600] * GRID_STEPS, gt=[0] * GRID_STEPS,
+                                   ft=[SURPLUS, SURPLUS] + [0] * (GRID_STEPS - 2),
+                                   p_N=[P_N] * GRID_STEPS, p_E=[P_E] * GRID_STEPS),
+        eta_c=1.0, eta_d=1.0, M=1e6)
+
+
 def economics(result):
     """s0-insensitive real money: import cost, export revenue, final battery value."""
     battery = result['batteries'][0]
@@ -125,3 +143,43 @@ def test_the_import_side_tie_break_stays_cost_neutral():
         values[strategy] = economics(build_grid_only(strategy).solve())
 
     assert values['attenuate_feedin_peaks'] == pytest.approx(values['none'])
+
+
+@pytest.mark.parametrize('charging_strategy, leveled', [
+    ('attenuate_demand_peaks', {'imp'}),
+    ('attenuate_feedin_peaks', {'exp'}),
+    ('attenuate_grid_peaks', {'imp', 'exp'}),
+])
+def test_earliness_only_outbids_a_side_the_strategy_does_not_level(charging_strategy, leveled):
+    """
+    Filling the battery sooner is not free on either grid side, so which of the two wins depends
+    on whether the strategy is protecting that side: a leveled side keeps its peak and the tie
+    break stays below the ramp weight, an unleveled side has no peak worth protecting and
+    earliness takes it outright. This is the whole rule, pinned on the weights themselves because
+    the schedules it produces depend on the request.
+    """
+    model = build(charging_strategy)
+
+    for side, weight in (('exp', model.prc_e_early), ('imp', model.prc_n_early)):
+        if side in leveled:
+            assert weight < model.prc_p_ramp, f"{side} is leveled, earliness must not outbid it"
+        else:
+            assert weight > model.prc_p_ramp, f"{side} is not leveled, earliness should take it"
+
+
+def test_solar_fills_the_battery_at_once_while_a_leveled_import_stays_flat():
+    """
+    Both sides at once on attenuate_demand_peaks: the surplus goes into the battery the moment it
+    arrives, because nothing levels the feed-in side, and the grid energy that still has to follow
+    it stays spread evenly, because the import side is the one being leveled. Earliness spends the
+    peak nobody asked it to shave and leaves the other alone.
+    """
+    result = build_mixed('attenuate_demand_peaks').solve()
+
+    assert result['status'] == 'Optimal'
+    charging = result['batteries'][0]['charging_power']
+    assert charging[:2] == pytest.approx([SURPLUS, SURPLUS])
+    assert result['grid_export'] == pytest.approx([0.0] * GRID_STEPS)
+    # the remaining 4000 Wh arrive as a flat profile over the steps that have no solar left
+    assert result['grid_import'][2:] == pytest.approx([4000.0 / (GRID_STEPS - 2)] * (GRID_STEPS - 2))
+    assert result['grid_import'][:2] == pytest.approx([0.0, 0.0])

@@ -175,18 +175,29 @@ class Optimizer:
         self.prc_p_peak = self.penalty_base * 1e-3
         self.prc_p_ramp = self.penalty_base * 1e-5
 
-        # weight the peak leveling strategies defer grid export at, so that a leveled profile
-        # still fills the batteries before it sends the surplus out. Two orders below the ramp
-        # weight, so leveling decides wherever the two disagree and this only picks between the
-        # schedules leveling rates equal.
-        self.prc_e_early = self.penalty_base * 1e-7
-        # same tie break for the demand side: a battery charging purely from the grid, with no
-        # surplus to hold back, gets nothing from prc_e_early above. Same weight, mirrored onto
-        # import instead of export.
-        self.prc_n_early = self.penalty_base * 1e-7
-
         # grid sides leveled by the active peak attenuation strategy, empty for all other strategies
         self.peak_sides = PEAK_STRATEGY_SIDES.get(strategy.charging_strategy, ())
+
+        # weights the peak leveling strategies fill the batteries early at, one per grid side:
+        # prc_e_early makes early export expensive so the surplus charges the battery first,
+        # prc_n_early does the same for a battery that has no surplus to hold back and charges
+        # from the grid instead.
+        #
+        # Filling sooner is not free on either side. A battery that is full by the first hour has
+        # no room left for the midday solar peak, so that peak leaves over the grid instead, and
+        # one filled at full power draws a taller import peak than one trickled. Which of the two
+        # wins therefore depends on whether the strategy is protecting that side at all:
+        #
+        # - a side the strategy levels is the whole point of the strategy, so the tie break stays
+        #   two orders below prc_p_ramp and only picks between schedules leveling rates equal
+        # - a side it does not level has no peak worth protecting, so earliness takes it outright
+        #
+        # attenuate_feedin_peaks therefore keeps its feed-in peak and fills at the rate leveling
+        # leaves it, while attenuate_demand_peaks fills as fast as charge_before_export does and
+        # spends the feed-in peak nobody asked it to shave. attenuate_grid_peaks levels both sides
+        # and so protects both.
+        self.prc_e_early = self.penalty_base * (1e-7 if 'exp' in self.peak_sides else 1e-3)
+        self.prc_n_early = self.penalty_base * (1e-7 if 'imp' in self.peak_sides else 1e-3)
 
     def create_model(self):
         """

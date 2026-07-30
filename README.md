@@ -44,7 +44,9 @@ Cheapest is not always kindest to the grid connection. The same house on a *flat
   <img alt="Grid exchange over 24 hours without a strategy and with attenuate_grid_peaks, showing the import peak dropping from 11.5 kW to 3.6 kW" src="docs/img/example-peak-light.svg">
 </picture>
 
-A cap and a ramp limit say how high the grid profile may go, not when the batteries fill, and on a flat tariff nothing else decides it either. The peak strategies therefore hold the surplus back from the grid the same way `charge_before_export` does, so that a levelled day still charges first and exports afterwards, and pull grid import forward for a battery that has no surplus to hold back. Both weights are two orders below the ramp, so they only pick between schedules the levelling rates equal — where the two disagree, as on the feed-in side below, levelling keeps the last word.
+A cap and a ramp limit say how high the grid profile may go, not when the batteries fill, and on a flat tariff nothing else decides it either. The peak strategies therefore hold the surplus back from the grid the same way `charge_before_export` does, and pull grid import forward for a battery that has no surplus to hold back, so that a levelled day still fills its batteries first.
+
+Filling sooner is not free on either side: a battery that is full by the first hour has no room left for the midday solar peak, and one filled at full power draws a taller import peak than one trickled. So which of the two wins depends on whether the strategy is protecting that side at all. On a side it levels, that peak is the entire point and levelling keeps the last word. On a side it does not level, there is no peak worth protecting and filling early takes it outright. `attenuate_demand_peaks` therefore fills as fast as `charge_before_export` does and spends the feed-in peak nobody asked it to shave, `attenuate_feedin_peaks` keeps its feed-in peak and fills at the rate levelling leaves it, and `attenuate_grid_peaks` levels both sides and so protects both. No case pays real money for the difference.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-early-dark.svg">
