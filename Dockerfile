@@ -18,6 +18,13 @@ ADD . /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-editable --no-group dev
 
+# Official CBC 2.10.10 build. Fetched on the build platform, it is only unpacked here.
+FROM --platform=$BUILDPLATFORM python:3.13-slim AS cbc
+ADD --checksum=sha256:f551e7b843e25becee466a447118f6f44f219c4e46cfb4670829ecd3cf47e7d8 \
+    https://github.com/coin-or/Cbc/releases/download/releases%2F2.10.10/Cbc-releases.2.10.10-x86_64-ubuntu22-gcc1130-static.tar.gz \
+    /tmp/cbc.tar.gz
+RUN tar -xzf /tmp/cbc.tar.gz -C /usr/local ./bin/cbc
+
 FROM python:3.13-slim
 
 # Create non-root user
@@ -26,21 +33,24 @@ RUN groupadd -r app && useradd -r -g app -s /bin/false app
 # Copy the environment, but not the source code
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 
-# pulp ships CBC 2.10.3 from 2019 for amd64, Debian packages 2.10.12. pulp resolves the solver by
-# path and offers no override, so the bundled binaries become links to the packaged one.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends coinor-cbc \
-    && rm -rf /var/lib/apt/lists/* \
-    && find /app/.venv -path '*/pulp/solverdir/cbc/*/cbc' -exec ln -sf /usr/bin/cbc {} \; \
-    && /app/.venv/bin/python -c "import pulp; \
-        s = pulp.PULP_CBC_CMD(msg=0); \
-        assert s.available(), 'cbc not executable at ' + s.pulp_cbc_path; \
+ARG TARGETARCH
+
+# pulp bundles CBC 2.10.10 for arm64 but 2.10.3 from 2019 for amd64, and resolves the solver by a
+# fixed path with no override, so the bundled amd64 binary is linked to the fetched 2.10.10 build.
+# The fetched binary is mounted rather than copied, so it does not weigh on the arm64 image.
+RUN --mount=from=cbc,source=/usr/local/bin/cbc,target=/tmp/cbc set -eu; \
+    if [ "$TARGETARCH" = "amd64" ]; then \
+        cp /tmp/cbc /usr/local/bin/cbc; \
+        find /app/.venv -path '*/pulp/solverdir/cbc/*/cbc' -exec ln -sf /usr/local/bin/cbc {} \; ; \
+    fi; \
+    solver=$(/app/.venv/bin/python -c "from pulp.apis.coin_api import pulp_cbc_path; print(pulp_cbc_path)"); \
+    echo | "$solver" | grep -q "Version: 2.10.10"; \
+    /app/.venv/bin/python -c "import pulp; \
         p = pulp.LpProblem('smoke', pulp.LpMaximize); \
         x = pulp.LpVariable('x', 0, 1, cat='Binary'); \
         p += x; \
-        p.solve(s); \
-        assert pulp.LpStatus[p.status] == 'Optimal', pulp.LpStatus[p.status]" \
-    && cbc -help 2>&1 | head -2
+        p.solve(pulp.PULP_CBC_CMD(msg=0)); \
+        assert pulp.LpStatus[p.status] == 'Optimal', pulp.LpStatus[p.status]"
 
 # Run the application
 ENV PYTHONUNBUFFERED=1
