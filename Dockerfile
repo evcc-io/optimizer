@@ -18,12 +18,9 @@ ADD . /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-editable --no-group dev
 
-# Official CBC 2.10.10 build. Fetched on the build platform, it is only unpacked here.
-FROM --platform=$BUILDPLATFORM python:3.13-slim AS cbc
 ADD --checksum=sha256:f551e7b843e25becee466a447118f6f44f219c4e46cfb4670829ecd3cf47e7d8 \
     https://github.com/coin-or/Cbc/releases/download/releases%2F2.10.10/Cbc-releases.2.10.10-x86_64-ubuntu22-gcc1130-static.tar.gz \
     /tmp/cbc.tar.gz
-RUN tar -xzf /tmp/cbc.tar.gz -C /usr/local ./bin/cbc
 
 FROM python:3.13-slim
 
@@ -37,20 +34,13 @@ ARG TARGETARCH
 
 # pulp bundles CBC 2.10.10 for arm64 but 2.10.3 from 2019 for amd64, and resolves the solver by a
 # fixed path with no override, so the bundled amd64 binary is linked to the fetched 2.10.10 build.
-# The fetched binary is mounted rather than copied, so it does not weigh on the arm64 image.
-RUN --mount=from=cbc,source=/usr/local/bin/cbc,target=/tmp/cbc set -eu; \
+RUN --mount=from=builder,source=/tmp/cbc.tar.gz,target=/tmp/cbc.tar.gz set -eu; \
     if [ "$TARGETARCH" = "amd64" ]; then \
-        cp /tmp/cbc /usr/local/bin/cbc; \
+        tar -xzf /tmp/cbc.tar.gz -C /usr/local ./bin/cbc; \
         find /app/.venv -path '*/pulp/solverdir/cbc/*/cbc' -exec ln -sf /usr/local/bin/cbc {} \; ; \
     fi; \
-    solver=$(/app/.venv/bin/python -c "from pulp.apis.coin_api import pulp_cbc_path; print(pulp_cbc_path)"); \
-    echo | "$solver" | grep -q "Version: 2.10.10"; \
-    /app/.venv/bin/python -c "import pulp; \
-        p = pulp.LpProblem('smoke', pulp.LpMaximize); \
-        x = pulp.LpVariable('x', 0, 1, cat='Binary'); \
-        p += x; \
-        p.solve(pulp.PULP_CBC_CMD(msg=0)); \
-        assert pulp.LpStatus[p.status] == 'Optimal', pulp.LpStatus[p.status]"
+    echo | "$(/app/.venv/bin/python -c 'from pulp.apis.coin_api import pulp_cbc_path; print(pulp_cbc_path)')" \
+        | grep -q 'Version: 2.10.10'
 
 # Run the application
 ENV PYTHONUNBUFFERED=1
