@@ -14,6 +14,7 @@
 | | Final SOC value | `bat.p_a` | *(raw, now also feeds `penalty_base` directly)* | ~1.7e2 (up to whatever `p_a` is configured) | actual currency |
 | | Demand-rate charge | `grid.prc_p_exc_imp` | *(raw; `prc_p_exc_imp·3600/min(dt)` now also feeds `penalty_base`, only when `p_max_imp` makes the rate active)* | unbounded, but tier 1 now tracks it | actual currency |
 | **3 — tie-break nudges** | Peak leveling | `prc_p_peak = penalty_base·1e-3` | ×1e-3 | 0.16 – 300 | shape, not cost |
+| | Level deviation | `prc_p_dev = penalty_base·1e-4`, per step weighted by `dt[t]/Σdt` | ×1e-4·dt[t]/Σdt | 2.5e-5 – 2.5e-2 | shape, not cost |
 | | Charge-before-export | `min_import_price·2e-5·(T−t)` | ×2e-5·(T−t) | ~1e-3 – tens | shape, not cost |
 | | Discharge-before-import | `min_import_price·5e-6·(T−t)` | ×5e-6·(T−t) | ~1e-4 – tens | shape, not cost |
 | | Charging priority | `min_import_price·5e-5·(T−t)·c_priority`, on `c` and on `d` | ×5e-5·(T−t)·c_priority | ~1e-3 – tens | shape, not cost |
@@ -24,6 +25,14 @@
 - The SOC penalty is charged per time step, so a violation lasting the whole horizon is paid for
   once per step while one confined to a single step is paid for once. `penalty_base` is sized
   against the single-step case, which is the weaker of the two.
+- The three leveling terms are ordered per W, not per horizon. Peak leveling is charged once on a
+  single value, level deviation is a time average, ramp leveling a sum over the steps. So the ramp
+  term is the one that grows with the horizon, and a long enough one with enough small ramps in it
+  outweighs a peak that is a decade dearer per W.
+- Level deviation carries the smallest coefficients in the model, an order below ramp leveling once
+  the time average is spread over the steps. Level and deviation variables are therefore bounded by
+  the power the side can physically carry: unbounded they relax into the same range as the big M of
+  1e6 and, on the largest stored case, cost the solver a factor of ten.
 - The tier 3 terms keyed off `min_import_price` invert sign when market prices go negative, the
   reason peak and ramp leveling use `penalty_base` instead.
 
