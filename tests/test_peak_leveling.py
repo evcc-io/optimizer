@@ -27,11 +27,49 @@ def deviation_weight(model, side='imp'):
                if v.name.startswith(f'p_{side}_dev_')) / model.objective_scale
 
 
-def test_weights_are_ordered_peak_before_deviation_before_ramp():
-    # the order the three leveling terms are meant to be read in: lowering the peak beats getting
-    # closer to the level, which beats a smoother transition, each by a decade per W
+def test_weights_are_ordered_peak_before_deviation():
+    # the order the two leveling terms are meant to be read in: lowering the peak beats getting
+    # closer to the level, by a decade per W
     model = build()
-    assert model.prc_p_peak > model.prc_p_dev > model.prc_p_ramp
+    assert model.prc_p_peak > model.prc_p_dev
+
+
+def test_no_ramp_term_is_left_in_the_model():
+    # the step to step ramp was dropped: it priced the transitions only, and carrying it alongside
+    # the deviation term put two absolute value systems on the same grid power for around a third
+    # of the solve time of a leveling case. Guard against it being reintroduced unnoticed.
+    model = build(strategy='attenuate_grid_peaks')
+    model.create_model()
+
+    assert not hasattr(model, 'prc_p_ramp')
+    assert not any(name.startswith('p_imp_ramp') or name.startswith('p_exp_ramp')
+                   for name in model.variables)
+    assert not any(v.name.startswith(('p_imp_ramp', 'p_exp_ramp'))
+                   for v in model.problem.variables())
+
+
+def test_the_level_goes_blind_on_a_side_resting_at_zero():
+    """
+    The documented blind spot of the free level, pinned so a change to the term has to confront it.
+
+    On a side that mostly rests at zero the level settles at zero, and with p_grid >= 0 the term
+    becomes sum(p_grid[t] * dt[t]) - the energy through the side, which the energy balance already
+    fixes. A plateau, a jagged profile and a single spike of the same energy then score the same,
+    so nothing below the peak orders them. The ramp term used to; this is what dropping it gives up.
+    """
+    dt = numpy.array([3600.] * 8)
+    plateau = numpy.array([1500., 1500., 1500., 1500., 0., 0., 0., 0.])
+    jagged = numpy.array([3000., 0., 3000., 0., 0., 0., 0., 0.])
+    spike = numpy.array([6000., 0., 0., 0., 0., 0., 0., 0.])
+
+    def term(power, level=0.):
+        """what the objective charges for this profile, the time average of |p - level|"""
+        return float((numpy.abs(power - level) * dt).sum() / dt.sum())
+
+    assert term(plateau) == pytest.approx(term(jagged)) == pytest.approx(term(spike))
+    # around the mean the three do separate, which is what a mean square deviation would see and
+    # what a free level at zero cannot. Kept as the reference the term is measured against.
+    assert term(plateau, plateau.mean()) < term(jagged, jagged.mean()) < term(spike, spike.mean())
 
 
 def test_deviation_weight_does_not_depend_on_the_sampling():
@@ -87,7 +125,7 @@ def test_a_limit_on_the_other_side_takes_the_bound_back_to_the_big_m(side, limit
 
 def test_a_pinned_peak_still_levels_the_steps_below_it():
     # a 6 kW load spike the schedule cannot touch fixes the horizon maximum, so the peak term has
-    # nothing left to win and the ramp term alone would rather charge flat out against the spike
+    # nothing left to win and the peak term alone would rather charge flat out against the spike
     # and stop than spread the same energy. Regression for the profile 028 stores.
     model = build(gt=[500., 500., 6000., 500., 500., 500., 500., 500.])
     model.batteries[0].s_goal = [0., 0., 0., 0., 0., 20000., 0., 0.]

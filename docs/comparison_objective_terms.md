@@ -18,21 +18,25 @@
 | | Charge-before-export | `min_import_price·2e-5·(T−t)` | ×2e-5·(T−t) | ~1e-3 – tens | shape, not cost |
 | | Discharge-before-import | `min_import_price·5e-6·(T−t)` | ×5e-6·(T−t) | ~1e-4 – tens | shape, not cost |
 | | Charging priority | `min_import_price·5e-5·(T−t)·c_priority`, on `c` and on `d` | ×5e-5·(T−t)·c_priority | ~1e-3 – tens | shape, not cost |
-| | Ramp leveling | `prc_p_ramp = penalty_base·1e-5` | ×1e-5 | 1.6e-3 – 3.0 | shape, not cost |
 
 ## What the table does not show
 
 - The SOC penalty is charged per time step, so a violation lasting the whole horizon is paid for
   once per step while one confined to a single step is paid for once. `penalty_base` is sized
   against the single-step case, which is the weaker of the two.
-- The three leveling terms are ordered per W, not per horizon. Peak leveling is charged once on a
-  single value, level deviation is a time average, ramp leveling a sum over the steps. So the ramp
-  term is the one that grows with the horizon, and a long enough one with enough small ramps in it
-  outweighs a peak that is a decade dearer per W.
-- Level deviation carries the smallest coefficients in the model, an order below ramp leveling once
-  the time average is spread over the steps. Level and deviation variables are therefore bounded by
-  the power the side can physically carry: unbounded they relax into the same range as the big M of
-  1e6 and, on the largest stored case, cost the solver a factor of ten.
+- The two leveling terms are ordered per W, not per horizon. Peak leveling is charged once on a
+  single value, level deviation is a time average, so neither grows with the horizon and the order
+  between them holds at any sampling.
+- Level deviation carries the smallest coefficients in the model, a decade below peak leveling and
+  smaller again once the time average is spread over the steps. Level and deviation variables are
+  therefore bounded by the power the side can physically carry: unbounded they relax into the same
+  range as the big M of 1e6 and, on the largest stored case, cost the solver a factor of ten.
+- Level deviation has a blind spot. The level is free, and on a side that mostly rests at zero it
+  settles there; with `p_grid ≥ 0` the term is then `Σ p_grid[t]·dt[t]`, the energy through the
+  side, which the energy balance already fixes. A plateau, a jagged profile and a single spike of
+  the same energy score identically and only the peak separates them. A ramp leveling term at
+  `penalty_base·1e-5` used to order them; it was dropped because it priced transitions only and
+  cost around a third of the solve time of a leveling case. `test_peak_leveling` pins both halves.
 - The tier 3 terms keyed off `min_import_price` invert sign when market prices go negative, the
-  reason peak and ramp leveling use `penalty_base` instead.
+  reason peak and level deviation leveling use `penalty_base` instead.
 

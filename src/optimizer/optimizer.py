@@ -169,18 +169,21 @@ class Optimizer:
         # solar power
         self.prc_e_grid_exp_pen = self.penalty_base * 10e1
 
-        # weights of the grid peak leveling strategies. capping the horizon maximum alone leaves the
-        # profile below the cap arbitrary, and the step to step ramp only sees the transitions: every
-        # path that rises monotonically between the same two levels carries the same ramp sum, so the
-        # two together cannot tell a straight climb from a plateau. The deviation from a free level
-        # closes that gap, it is what a mean square deviation from constant grid power would measure
-        # and is the only one of the three that prices every single time step.
-        # Per unit of W the order is peak > deviation > ramp, so lowering the peak still wins a
-        # direct trade. It is an order per W and not per horizon: the ramp is a sum over the steps
-        # and the peak a single value, so on a long horizon many small ramps can outweigh it.
+        # weights of the grid peak leveling strategies. Capping the horizon maximum alone leaves the
+        # profile below the cap arbitrary: once the maximum is pinned by a load the schedule cannot
+        # touch, the term has nothing left to win below it. The deviation from a free level closes
+        # that gap, it is what a mean square deviation from constant grid power would measure and it
+        # prices every single time step rather than one value out of the horizon.
+        # Per unit of W the peak outweighs the deviation, so lowering the peak still wins a direct
+        # trade against leveling the profile underneath it.
+        #
+        # A step to step ramp term sat between these two until the deviation term arrived. It priced
+        # the transitions only, so it could not tell a straight climb from a plateau, and carrying
+        # both absolute value systems over the same grid power cost around a third of the solve time
+        # of a leveling case for no measurable gain in deviation. See the blind spot noted in
+        # _add_energy_balance_constraints for what its removal gives up.
         self.prc_p_peak = self.penalty_base * 1e-3
         self.prc_p_dev = self.penalty_base * 1e-4
-        self.prc_p_ramp = self.penalty_base * 1e-5
 
         # grid sides leveled by the active peak attenuation strategy, empty for all other strategies
         self.peak_sides = PEAK_STRATEGY_SIDES.get(strategy.charging_strategy, ())
@@ -277,9 +280,8 @@ class Optimizer:
         if self.is_grid_demand_rate_active:
             self.variables['p_max_imp_exc'] = pulp.LpVariable("p_max_imp_exc", lowBound=0)
 
-        # highest grid power over the whole horizon (W) and step to step ramp of the grid power (W)
-        # per side, used by the peak attenuation strategies. there is no ramp into the first time
-        # step, so the ramp of step t is held at index t - 1.
+        # highest grid power over the whole horizon (W) per side, used by the peak attenuation
+        # strategies.
         # p_{side}_lvl is the constant the profile is leveled towards and p_{side}_dev the distance
         # of each step from it (W). The level is a variable and not the mean of the profile, so the
         # optimizer places it where the profile is cheapest to level, and nothing forces the schedule
@@ -291,10 +293,6 @@ class Optimizer:
             # a natural cap over the global big M.
             p_side_max = self._peak_side_bound(side)
             self.variables[f'p_{side}_peak'] = pulp.LpVariable(f"p_{side}_peak", lowBound=0)
-            self.variables[f'p_{side}_ramp'] = [
-                pulp.LpVariable(f"p_{side}_ramp_{t}", lowBound=0)
-                for t in range(1, self.T)
-            ]
             self.variables[f'p_{side}_lvl'] = pulp.LpVariable(f"p_{side}_lvl", lowBound=0, upBound=p_side_max)
             self.variables[f'p_{side}_dev'] = [
                 pulp.LpVariable(f"p_{side}_dev_{t}", lowBound=0, upBound=p_side_max)
@@ -440,10 +438,10 @@ class Optimizer:
 
         # level the grid profile to unload the public grid from peaks. attenuate_demand_peaks levels
         # grid import, attenuate_feedin_peaks levels grid export, attenuate_grid_peaks levels both.
-        # the penalty sits on the horizon maximum, on the distance of every step from a free level
-        # and on the step to step ramp instead of on charge power, so the optimizer spreads charging
-        # at partial power over several time steps rather than running one step at full power, and
-        # keeps the profile below the cap leveled too.
+        # the penalty sits on the horizon maximum and on the distance of every step from a free
+        # level instead of on charge power, so the optimizer spreads charging at partial power over
+        # several time steps rather than running one step at full power, and keeps the profile below
+        # the cap leveled too.
         # penalty_base is used instead of min_import_price because negative market prices would turn
         # this penalty into a reward for peaks.
         horizon = float(sum(self.time_series.dt))
@@ -455,7 +453,6 @@ class Optimizer:
             # like one lasting an hour.
             objective += - pulp.lpSum(self.variables[f'p_{side}_dev'][t] * self.time_series.dt[t]
                                       for t in self.time_steps) / horizon * self.prc_p_dev
-            objective += - pulp.lpSum(self.variables[f'p_{side}_ramp']) * self.prc_p_ramp
 
         # prefer discharging batteries completely before importing from grid
         if self.strategy.discharging_strategy == 'discharge_before_import':
@@ -562,9 +559,17 @@ class Optimizer:
                 self.problem += (self.variables['e_exp_lim_exc'][t]
                                  <= self.M * (1 - self.variables['z_exp_lim'][t]))
 
-        # track the horizon maximum and the step to step ramp of the total grid power for every side
-        # the strategy levels. Both include the portion beyond p_max_imp / p_max_exp, so they stay
-        # correct in demand rate mode and when a limit is violated.
+        # track the horizon maximum and the distance from the level of the total grid power for every
+        # side the strategy levels. Both include the portion beyond p_max_imp / p_max_exp, so they
+        # stay correct in demand rate mode and when a limit is violated.
+        #
+        # Known blind spot: the level is free, and on a side that mostly rests at zero it settles at
+        # zero. With p_grid >= 0 the term is then sum(p_grid[t] * dt[t]), the energy through the
+        # side, which the energy balance already fixes - so it scores a plateau, a jagged profile and
+        # a single spike of the same energy identically and orders none of them. Only the peak still
+        # separates them there. The step to step ramp used to, and test_peak_leveling pins what that
+        # costs; on the stored corpus it is worth at most 8 W of deviation, and it is not worth a
+        # third of the solve time.
         for side in self.peak_sides:
             grid_var, lim_exc_var = PEAK_SIDE_VARIABLES[side]
             # total grid power of this side per time step (W)
@@ -577,10 +582,6 @@ class Optimizer:
 
             for t in self.time_steps:
                 self.problem += p_grid[t] <= self.variables[f'p_{side}_peak']
-            # ramp magnitude: p_ramp[t - 1] >= |p_grid[t] - p_grid[t-1]|
-            for t in range(1, self.T):
-                self.problem += self.variables[f'p_{side}_ramp'][t - 1] >= p_grid[t] - p_grid[t - 1]
-                self.problem += self.variables[f'p_{side}_ramp'][t - 1] >= p_grid[t - 1] - p_grid[t]
             # distance from the level: p_dev[t] >= |p_grid[t] - p_lvl|
             for t in self.time_steps:
                 self.problem += self.variables[f'p_{side}_dev'][t] >= p_grid[t] - self.variables[f'p_{side}_lvl']

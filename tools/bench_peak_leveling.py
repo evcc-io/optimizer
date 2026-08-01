@@ -4,6 +4,8 @@ Runs every stored test case through the working tree and through a reference rev
 optimizer.py, and reports solve time, model size and how level the resulting grid profile is.
 
     uv run python tools/bench_peak_leveling.py [--rev main] [--repeat 3]
+    uv run python tools/bench_peak_leveling.py --strategy attenuate_grid_peaks
+    uv run python tools/bench_peak_leveling.py --sweep
 """
 import argparse
 import importlib
@@ -87,15 +89,85 @@ def run(mod, req, repeat):
             'cols': len(opt.problem.variables()), 'opt': opt}
 
 
+# the pinned peak sweep: a load spike the schedule cannot touch fixes the horizon maximum, which is
+# the case the peak term alone cannot level below. 3 x 6 x 3 x 3 x 3 = 486 combinations.
+SWEEP_SPIKES = (4000., 6000., 8000.)
+SWEEP_POSITIONS = (1, 2, 3, 4, 5, 6)
+SWEEP_GOALS = (8000., 12000., 16000.)
+SWEEP_POWERS = (2000., 3000., 4000.)
+SWEEP_LOADS = (300., 500., 800.)
+
+
+def sweep_cases():
+    """every pinned peak combination, as optimizer requests"""
+    for spike in SWEEP_SPIKES:
+        for pos in SWEEP_POSITIONS:
+            for goal in SWEEP_GOALS:
+                for power in SWEEP_POWERS:
+                    for load in SWEEP_LOADS:
+                        gt = [load] * 8
+                        gt[pos] = spike
+                        yield {
+                            'strategy': {'charging_strategy': 'attenuate_demand_peaks'},
+                            'batteries': [{'charge_from_grid': True, 'discharge_to_grid': False,
+                                           's_capacity': 40000., 's_min': 0., 's_max': 40000.,
+                                           's_initial': 0., 's_goal': [0.] * 7 + [goal],
+                                           'c_min': 0., 'c_max': power, 'd_max': 0., 'p_a': 0.}],
+                            'time_series': {'dt': [3600] * 8, 'gt': gt, 'ft': [0.] * 8,
+                                            'p_N': [0.0003] * 8, 'p_E': [0.0001] * 8},
+                            'eta_c': 0.95, 'eta_d': 0.95,
+                        }
+
+
+def run_sweep(ref, repeat):
+    """compare the reference and the working tree over the pinned peak sweep"""
+    changed, sds, peaks_up, costs = [], [], 0, []
+    total = 0
+    for req in sweep_cases():
+        total += 1
+        a, b = run(ref, req, repeat), run(new, req, repeat)
+        if a['res']['status'] not in ('Optimal', 'Feasible') or b['res']['status'] != a['res']['status']:
+            continue
+        dt = req['time_series']['dt']
+        pa, pb = profiles(a['opt'], a['res'])['imp'], profiles(b['opt'], b['res'])['imp']
+        costs.append(abs(b['res']['objective_value'] - a['res']['objective_value']))
+        if pb.max() > pa.max() + 1:
+            peaks_up += 1
+        if not np.allclose(pa, pb, atol=1):
+            changed.append((sd(pa, dt), sd(pb, dt)))
+            sds.append(sd(pa, dt) - sd(pb, dt))
+
+    print(f'cases                    {total}')
+    print(f'profile changed          {len(changed)} of {total} '
+          f'({len(changed) / total * 100:.0f} %)')
+    if changed:
+        ref_sd = np.mean([a for a, _ in changed])
+        new_sd = np.mean([b for _, b in changed])
+        worst = max(changed, key=lambda p: p[0] - p[1])
+        print(f'deviation where changed  {ref_sd:.0f} W -> {new_sd:.0f} W, '
+              f'mean {(1 - new_sd / ref_sd) * 100:.0f} % lower')
+        print(f'worst single case        {worst[0]:.0f} W -> {worst[1]:.0f} W '
+              f'({(worst[1] / worst[0] - 1) * 100:.0f} %)')
+        print(f'cases where it got worse {sum(1 for d in sds if d < -1)}')
+    print(f'peak raised              {peaks_up} of {total}')
+    print(f'largest cost delta       {max(costs):.2e}')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--rev', default='main', help='revision to compare against')
     ap.add_argument('--repeat', type=int, default=3, help='solves per case, fastest counts')
     ap.add_argument('--strategy', default=None,
                     help='force this charging strategy on every case instead of the stored one')
+    ap.add_argument('--sweep', action='store_true',
+                    help='run the pinned peak sweep instead of the stored cases')
     args = ap.parse_args()
 
     ref = load_reference(args.rev)
+
+    if args.sweep:
+        run_sweep(ref, args.repeat)
+        return
 
     print(f'{"case":46s} {"t_ref":>7s} {"t_new":>7s} {"rows":>11s} {"cols":>9s}  '
           f'{"sd_ref":>8s} {"sd_new":>8s} {"peak_ref":>8s} {"peak_new":>8s}  schedule')
