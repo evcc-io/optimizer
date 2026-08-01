@@ -271,6 +271,39 @@ components:
           maximum: 2
           default: 0
           description: Charging and discharging priority 0..2 compared to other batteries. 2 = highest priority.
+        charge_profile:
+          type: string
+          description: |
+            Named charge profile for SoC-dependent charge power limiting
+            (CC-CV taper). When set, the MILP solver uses iterative constraint
+            tightening to enforce realistic charge power limits at high SoC.
+            Available profiles: lifepo4_conservative, lifepo4_moderate.
+            Individual parameters can be overridden with charge_knee,
+            charge_k, charge_c_rate_float.
+          example: lifepo4_conservative
+        charge_knee:
+          type: number
+          minimum: 0
+          maximum: 100
+          description: |
+            SoC percentage where charge power tapering begins.
+            With charge_profile: overrides the profile default.
+            Without charge_profile: requires charge_k to build a custom profile.
+          example: 65
+        charge_k:
+          type: number
+          minimum: 0
+          description: |
+            Exponential decay constant for the CC-CV taper curve.
+            Higher values mean steeper power reduction above the knee.
+          example: 0.052
+        charge_c_rate_float:
+          type: number
+          minimum: 0
+          description: |
+            Minimum C-rate at the tail end of charging (float/balancing phase).
+            Default: 0.01 (C/100).
+          example: 0.01
 
     TimeSeries:
       type: object
