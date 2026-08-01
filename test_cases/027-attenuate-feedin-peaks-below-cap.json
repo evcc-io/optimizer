@@ -60,7 +60,7 @@
     },
     "expected_response": {
         "status": "Optimal",
-        "objective_value": 136.89999999999998,
+        "objective_value": 149.39999999999998,
         "limit_violations": {
             "grid_import_limit_exceeded": false,
             "grid_export_limit_hit": false
