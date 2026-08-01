@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 from tempfile import TemporaryDirectory
 from typing import Dict, List, Optional
@@ -5,6 +6,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pulp
 
+from .charging_profiles import max_charge_power
 from .settings import OptimizerSettings
 
 
@@ -87,6 +89,7 @@ class BatteryConfig:
     p_demand: Optional[List[float]] = None  # Minimum charge demand (Wh)
     s_goal: Optional[List[float]] = None  # Goal state of charge (Wh)
     c_priority: int = 0
+    charge_profile: Optional[dict] = None  # CC-CV taper profile (charging_profiles format)
 
 
 @dataclass
@@ -190,6 +193,7 @@ class Optimizer:
         self._setup_target_function()
         self._add_energy_balance_constraints()
         self._add_battery_constraints()
+        self._add_charge_profile_constraints()
 
     def _setup_variables(self):
         """
@@ -635,10 +639,80 @@ class Optimizer:
                 self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
                                  * (1 - self.variables['z_cd'][i][t]))
 
+    def _add_charge_profile_constraints(self):
+        """Add piecewise-linear upper bounds on charge power from CC-CV taper profiles.
+
+        For each battery with a charge_profile, the taper curve P_max(SoC) is
+        a convex decreasing function above the knee. We approximate it with
+        tangent lines at 4 breakpoints. Each tangent is a valid linear upper
+        bound (convexity guarantees the tangent never exceeds the curve), so
+        the MILP enforces realistic charge power limits in a single solve.
+
+        The constraint for slot t uses s[i][t-1] (SoC at slot start). For
+        t=0, s_initial is a constant so the bound is applied directly to
+        the variable's upper bound.
+        """
+        for i, bat in enumerate(self.batteries):
+            if bat.charge_profile is None:
+                continue
+
+            profile = bat.charge_profile
+            cap = bat.s_capacity
+            if cap <= 0:
+                continue
+
+            knee = profile['knee']
+            k = profile['k']
+            c_rate_max = profile['c_rate_max']
+
+            # 4 breakpoints from knee to 100% SoC
+            n_points = 4
+            breakpoints = []
+            for j in range(n_points):
+                soc_pct = knee + (100.0 - knee) * j / (n_points - 1)
+                s_wh = soc_pct / 100.0 * cap
+                p_w = max_charge_power(profile, cap, soc_pct)
+                # derivative of P_max w.r.t. SoC in Wh:
+                # dP/ds = dP/d(soc%) * d(soc%)/ds
+                #       = (-k * c_rate_max * cap * e^(-k*(soc%-knee))) * (100/cap)
+                #       = -k * c_rate_max * 100 * e^(-k*(soc%-knee))
+                dp_ds = -k * c_rate_max * 100.0 * math.exp(-k * (soc_pct - knee))
+                breakpoints.append((s_wh, p_w, dp_ds))
+
+            for s_b, p_b, dp_ds in breakpoints:
+                for t in self.time_steps:
+                    dt_h = self.time_series.dt[t] / 3600.0
+
+                    if t == 0:
+                        # s_initial is a constant: compute a fixed upper bound
+                        p_limit = p_b + dp_ds * (bat.s_initial - s_b)
+                        e_limit = p_limit * dt_h
+                        e_var_ub = bat.c_max * dt_h
+                        # only add if tighter than the existing variable bound
+                        if e_limit < e_var_ub - 1.0:
+                            self.problem += (
+                                self.variables['c'][i][t] <= e_limit,
+                                f"taper_{i}_{t}_bp{breakpoints.index((s_b, p_b, dp_ds))}",
+                            )
+                    else:
+                        # linear constraint: c[i][t] <= (p_b - dp_ds*s_b)*dt_h + dp_ds*dt_h * s[i][t-1]
+                        s_prev = self.variables['s'][i][t - 1]
+                        intercept = (p_b - dp_ds * s_b) * dt_h
+                        slope = dp_ds * dt_h
+                        self.problem += (
+                            self.variables['c'][i][t] <= intercept + slope * s_prev,
+                            f"taper_{i}_{t}_bp{breakpoints.index((s_b, p_b, dp_ds))}",
+                        )
+
     def solve(self) -> Dict:
         """
         Creates the MILP model if none exists and solves the optimization problem.
-        Returns a dictionary with the optimization results
+
+        When batteries have a charge_profile (CC-CV taper), piecewise-linear
+        upper bounds on charge power are part of the model, so a single solve
+        enforces realistic SoC-dependent charge limits.
+
+        Returns a dictionary with the optimization results.
         """
 
         if self.problem is None:
