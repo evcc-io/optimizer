@@ -22,6 +22,13 @@ PEAK_STRATEGY_SIDES = {
     'attenuate_grid_peaks': ('imp', 'exp'),
 }
 
+# every strategy the optimizer acts on. An unknown name reaches no branch below and the request is
+# then solved without a strategy at all, which is indistinguishable from success in the response:
+# the schedule is cost optimal, the status says Optimal, and only the shape of the profile gives it
+# away. Listed here next to the code that reads them so the API can reject the rest up front.
+CHARGING_STRATEGIES = ('none', 'charge_before_export', *PEAK_STRATEGY_SIDES)
+DISCHARGING_STRATEGIES = ('none', 'discharge_before_import')
+
 # magnitude the largest objective coefficient is placed at before the model goes to the solver.
 # CBC judges improvements against absolute tolerances (~1e-7), and with prices given per Wh the
 # raw coefficients land close to that bound, so real improvements get pruned as numerical noise.
