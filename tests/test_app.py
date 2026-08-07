@@ -8,7 +8,6 @@ import pulp
 import pytest
 
 from optimizer.app import app, settings
-from optimizer.optimizer import CHARGING_STRATEGIES, DISCHARGING_STRATEGIES
 
 
 @pytest.mark.parametrize('test_case', pathlib.Path('test_cases').glob('*.json'))
@@ -155,4 +154,3 @@ def test_abort_returns_json_message():
     assert response.status_code == 400
     assert response.json is not None
     assert "message" in response.json
-

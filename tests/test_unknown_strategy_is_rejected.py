@@ -1,12 +1,6 @@
 import json
-import pathlib
 
-import jwt
-import numpy
-import pulp
-import pytest
-
-from optimizer.app import app, settings
+from optimizer.app import app
 from optimizer.optimizer import CHARGING_STRATEGIES, DISCHARGING_STRATEGIES
 
 
