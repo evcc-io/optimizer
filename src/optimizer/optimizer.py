@@ -80,6 +80,11 @@ COST_BOUND_SLACK = 1e-5
 # peak. A hundredth of a cent, three orders below the gap the cost stage may already leave.
 COST_BOUND_TOLERANCE = 1e-4
 
+# how far off 0 or 1 a binary may land and still count as integral. CBC's own integer tolerance
+# defaults to 1e-6 and it rounds within that before reporting, so anything above this came back
+# from a relaxation rather than from a rounding difference.
+INTEGRALITY_TOLERANCE = 1e-5
+
 # share of OPTIMIZER_TIME_LIMIT the probe gets before the solve falls back to the split. Kept well
 # under half: the probe is pure loss on a request that ends up splitting anyway, so it should be
 # long enough to catch the ordinary ones and no longer. Measured over the captured slow requests,
@@ -762,7 +767,17 @@ class Optimizer:
         # rather than read off the status, so a solver that reports the wrong one cannot spend
         # money.
         self.preference_stage = pulp.LpStatus[self.problem.status]
-        improved = (pulp.value(self.preference_objective) > undecided
+        # a stage that ran out of clock before it found an integer solution leaves the relaxation
+        # in the variables, and pulp reads that back like any other result. It looks like a large
+        # improvement precisely because it is one the model forbids: the binaries land between 0
+        # and 1, and every rule they gate stops holding, c_min among them. Checked here beside the
+        # other two conditions, for the same reason they are checked here rather than read off the
+        # status: a solver that reports the wrong one must not be able to spend money, and it must
+        # not be able to hand back a schedule the model does not allow either.
+        integral = self.problem.sol_status in (pulp.LpSolutionOptimal,
+                                               pulp.LpSolutionIntegerFeasible)
+        improved = (integral
+                    and pulp.value(self.preference_objective) > undecided
                     and pulp.value(self.cost_objective) >= cost - budget - COST_BOUND_TOLERANCE)
         if not improved:
             self.preference_stage += ', kept the first stage'
@@ -826,6 +841,16 @@ class Optimizer:
                 var.varValue = value
             self.problem.status = pulp.LpStatusOptimal
 
+    def _is_integral(self) -> bool:
+        """Whether every integer variable of the current solution came back on a whole number.
+
+        pulp stores a binary as an integer bounded to 0 and 1, so LpBinary never appears on a
+        variable and every gate in this model is covered by the integer category alone.
+        """
+        return all(abs(var.varValue - round(var.varValue)) <= INTEGRALITY_TOLERANCE
+                   for var in self.problem.variables()
+                   if var.cat == pulp.LpInteger and var.varValue is not None)
+
     def solve(self) -> Dict:
         """
         Creates the MILP model if none exists and solves the optimization problem.
@@ -855,6 +880,14 @@ class Optimizer:
         status = pulp.LpStatus[self.problem.status]
         if status == 'Optimal' and self.problem.sol_status != pulp.LpSolutionOptimal:
             status = 'Feasible'
+
+        # last line of defence. Every stage above decides for itself whether to keep what came
+        # back, so nothing should reach this point off the integers, but a schedule that breaks
+        # the model is worse than no schedule: it looks like an answer, and the caller charges a
+        # battery by it. One pass over the binaries against a solve measured in seconds.
+        if status in ('Optimal', 'Feasible') and not self._is_integral():
+            print("solver returned a fractional solution, reporting no schedule")
+            status = 'Not Solved'
 
         # grid import and export if no demand rate is active
         # if a limit is set and exceeded, this is the part that is actually imported / exported.
