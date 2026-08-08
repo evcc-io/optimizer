@@ -766,10 +766,12 @@ class Optimizer:
         for t in self.time_steps:
             clean_objective += pulp.value(self.variables['e'][t]) * self.time_series.p_E[t]
 
-        # Final state of charge value [currency unit]
+        # Value of the energy the horizon added to the batteries [currency unit]. The reference is
+        # bat.s_initial and not s[0]: s[0] is the state after the first time step and already
+        # carries that step's charging, so subtracting it dropped the first step from the result.
         for i, bat in enumerate(self.batteries):
             clean_objective += (pulp.value(self.variables['s'][i][self.T-1])
-                                - pulp.value(self.variables['s'][i][0])) * bat.p_a
+                                - bat.s_initial) * bat.p_a
 
         # charge for import power demand rate. The demand rate is applied to the maximum
         # power draw beyond the threshold within the time horizon.
