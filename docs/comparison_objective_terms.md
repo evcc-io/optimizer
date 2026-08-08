@@ -34,4 +34,8 @@
   halves.
 - The tier 3 terms keyed off `min_import_price` invert sign when market prices go negative, the
   reason peak leveling uses `penalty_base` instead.
+- Tier 3 is not solved together with the tiers above it. `solve()` maximizes tiers 1 and 2 first,
+  then maximizes tier 3 over the schedules that keep that value, so the distance between the tiers
+  no longer decides whether a preference is respected. The ranges listed above are what the second
+  stage works on, and it normalizes them off its own largest coefficient before solving.
 
