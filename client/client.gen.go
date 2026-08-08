@@ -62,6 +62,13 @@ type BatteryConfig struct {
 	//   - False: (default) The battery cannot be charged while power is retrieved from grid
 	ChargeFromGrid bool `json:"charge_from_grid,omitempty"`
 
+	// DDemand Minimum discharge demand per time step (Wh). Forces the battery to discharge in the
+	// given steps, e.g. to sell into a high feed-in rate. The demand is clipped to d_max and
+	// is a soft goal: it is given up rather than draining the battery below s_min, and rather
+	// than making the request infeasible. Discharging into the grid additionally requires
+	// discharge_to_grid.
+	DDemand []float32 `json:"d_demand,omitempty"`
+
 	// DMax Maximum discharge power in W
 	DMax float32 `json:"d_max"`
 

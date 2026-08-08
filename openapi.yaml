@@ -258,6 +258,18 @@ components:
             minimum: 0
           description: Minimum charge demand per time step (Wh)
           example: [0, 1200, 1800, 2500, 1200, 1500]
+        d_demand:
+          type: array
+          items:
+            type: number
+            minimum: 0
+          description: |
+            Minimum discharge demand per time step (Wh). Forces the battery to discharge in the
+            given steps, e.g. to sell into a high feed-in rate. The demand is clipped to d_max and
+            is a soft goal: it is given up rather than draining the battery below s_min, and rather
+            than making the request infeasible. Discharging into the grid additionally requires
+            discharge_to_grid.
+          example: [0, 0, 0, 2500, 2500, 0]
         s_goal:
           type: array
           items:
