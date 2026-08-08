@@ -1,0 +1,90 @@
+{
+    "expected_response": {
+        "status": "Optimal",
+        "objective_value": 0,
+        "limit_violations": {
+            "grid_import_limit_exceeded": false,
+            "grid_export_limit_hit": false
+        },
+        "batteries": [
+            {
+            "charging_power": [
+                0
+            ],
+            "discharging_power": [
+                0
+            ],
+            "state_of_charge": [
+                0
+            ]
+            }
+        ],
+        "grid_import": [
+            0
+        ],
+        "grid_export": [
+            0
+        ],
+        "flow_direction": [
+            0
+        ],
+        "grid_import_overshoot": [
+            0
+        ],
+        "grid_export_overshoot": [
+            0
+        ]
+    },
+    "request": {
+        "strategy": {
+            "charging_strategy": "string",
+            "discharging_strategy": "string"
+        },
+        "grid": {
+            "p_max_imp": 0,
+            "p_max_exp": 0,
+            "prc_p_exc_imp": 0
+        },
+        "batteries": [
+            {
+            "charge_from_grid": true,
+            "discharge_to_grid": true,
+            "s_capacity": 0,
+            "s_min": 0,
+            "s_max": 0,
+            "s_initial": 0,
+            "p_demand": [
+                0
+            ],
+            "s_goal": [
+                0
+            ],
+            "c_min": 0,
+            "c_max": 0,
+            "d_max": 0,
+            "p_a": 0,
+            "c_priority": 0
+            }
+        ],
+        "time_series": {
+            "dt": [
+            0
+            ],
+            "gt": [
+            0
+            ],
+            "ft": [
+            0
+            ],
+            "p_N": [
+            0
+            ],
+            "p_E": [
+            0
+            ]
+        },
+        "eta_c": 0.95,
+        "eta_d": 0.95
+    },
+    "test_items": {}
+}
