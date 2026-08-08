@@ -134,6 +134,37 @@ def test_slow_requests_are_dumped(tmp_path, monkeypatch):
     assert json.loads(lines[1])["elapsed"] > 0
 
 
+def test_per_battery_efficiency():
+    # both batteries are forced to charge the same energy, so their state of charge
+    # gain must scale with their individual charging efficiency
+    client = app.test_client()
+    battery = {
+        "charge_from_grid": True,
+        "s_min": 0, "s_max": 10000, "s_initial": 0,
+        "c_min": 0, "c_max": 2000, "d_max": 0, "p_a": 0.01,
+        "p_demand": [1000, 0],
+    }
+    request = {
+        "batteries": [
+            {**battery, "eta_c": 1.0},
+            {**battery, "eta_c": 0.5},
+        ],
+        "time_series": {
+            "dt": [3600, 3600],
+            "gt": [0, 0],
+            "ft": [0, 0],
+            "p_N": [0.3, 0.3],
+            "p_E": [0.3, 0.3],
+        },
+    }
+    response = client.post("/optimize/charge-schedule", json=request)
+
+    assert response.status_code == 200
+    assert response.json["status"] == "Optimal"
+    assert numpy.isclose(response.json["batteries"][0]["state_of_charge"][0], 1000)
+    assert numpy.isclose(response.json["batteries"][1]["state_of_charge"][0], 500)
+
+
 def test_abort_returns_json_message():
     # message-only api.abort(400, ...) must return a JSON body, not an empty response
     client = app.test_client()

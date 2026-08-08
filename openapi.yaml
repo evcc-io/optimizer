@@ -271,6 +271,18 @@ components:
           maximum: 2
           default: 0
           description: Charging and discharging priority 0..2 compared to other batteries. 2 = highest priority.
+        eta_c:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Charging efficiency (0 to 1). Overrides the top level eta_c for this battery.
+          example: 0.95
+        eta_d:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Discharging efficiency (0 to 1). Overrides the top level eta_d for this battery.
+          example: 0.95
 
     TimeSeries:
       type: object
@@ -344,14 +356,14 @@ components:
           minimum: 0
           maximum: 1
           default: 0.95
-          description: Charging efficiency (0 to 1)
+          description: Default charging efficiency (0 to 1) for batteries without their own eta_c
           example: 0.95
         eta_d:
           type: number
           minimum: 0
           maximum: 1
           default: 0.95
-          description: Discharging efficiency (0 to 1)
+          description: Default discharging efficiency (0 to 1) for batteries without their own eta_d
           example: 0.95
 
     BatteryResult:
