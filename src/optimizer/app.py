@@ -111,6 +111,7 @@ battery_config_model = api.model('BatteryConfig', {
     's_max': fields.Float(required=True, description='Maximum state of charge (Wh)'),
     's_initial': fields.Float(required=True, description='Initial state of charge (Wh)'),
     'p_demand': fields.List(fields.Float, required=False, description='Minimum charge demand per time step (Wh)'),
+    'd_demand': fields.List(fields.Float, required=False, description='Minimum discharge demand per time step (Wh), forces the battery to discharge.'),
     's_goal': fields.List(fields.Float, required=False, description='Goal state of charge at each time step (Wh)'),
     'c_min': fields.Float(required=True, description='Minimum charge power (W)'),
     'c_max': fields.Float(required=True, description='Maximum charge power (W)'),
@@ -201,6 +202,7 @@ class OptimizeCharging(Resource):
                     s_max=bat_data['s_max'],
                     s_initial=bat_data['s_initial'],
                     p_demand=bat_data.get('p_demand'),
+                    d_demand=bat_data.get('d_demand'),
                     s_goal=bat_data.get('s_goal'),
                     c_min=bat_data['c_min'],
                     c_max=bat_data['c_max'],
@@ -222,10 +224,11 @@ class OptimizeCharging(Resource):
             lengths = [len(time_series.gt), len(time_series.ft),
                        len(time_series.p_N), len(time_series.p_E)]
 
-            # Validate p_demand if provided
+            # Validate p_demand and d_demand if provided
             for bat in batteries:
-                if bat.p_demand is not None:
-                    lengths.append(len(bat.p_demand))
+                for series in (bat.p_demand, bat.d_demand):
+                    if series is not None:
+                        lengths.append(len(series))
 
             # Validate s_goal if provided
             for bat in batteries:
