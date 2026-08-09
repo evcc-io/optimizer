@@ -10,7 +10,7 @@ from flask import Flask, jsonify, request
 from flask_restx import Api, Resource, fields
 from werkzeug.exceptions import BadRequest
 
-from .optimizer import BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
+from .optimizer import CHARGING_STRATEGIES, DISCHARGING_STRATEGIES, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
 from .settings import OptimizerSettings
 
 app = Flask(__name__)
@@ -91,8 +91,10 @@ ns = api.namespace('optimize', description='EV Charging Optimization Operations'
 
 # Input models for API documentation
 strategy_model = api.model('OptimizationStrategy', {
-    'charging_strategy': fields.String(required=False, description='Sets a strategy for charging in situations where choices are cost neutral.'),
-    'discharging_strategy': fields.String(required=False, description='Sets a strategy for discharging in situations where choices are cost neutral.')
+    'charging_strategy': fields.String(required=False, enum=list(CHARGING_STRATEGIES),
+                                       description='Sets a strategy for charging in situations where choices are cost neutral.'),
+    'discharging_strategy': fields.String(required=False, enum=list(DISCHARGING_STRATEGIES),
+                                          description='Sets a strategy for discharging in situations where choices are cost neutral.')
 })
 
 grid_model = api.model('GridConfig', {

@@ -37,7 +37,9 @@ The optimizer buys all 29 kWh of grid energy in the three cheapest hours of the 
 
 Cheapest is not always kindest to the grid connection. The same house on a *flat* tariff — where nothing but the strategy decides when to charge — takes its 29 kWh at the full 11 kW in the last two hours before the EV deadline, and pushes the midday surplus out in two short bursts.
 
-`attenuate_grid_peaks` penalizes both the highest grid power over the horizon and the step-to-step ramp, on the import and the feed-in side. The same energy then arrives as a flat 3.6 kW plateau, and the feed-in peak drops from 1.3 kW to 0.25 kW. Nothing costs more — the connection just sees a calmer profile. `attenuate_demand_peaks` and `attenuate_feedin_peaks` do the same for one side only.
+`attenuate_grid_peaks` penalizes the highest grid power over the horizon, on the import and the feed-in side. The same energy then arrives as a flat 3.6 kW plateau, and the feed-in peak drops from 1.3 kW to 0.25 kW. Nothing costs more — the connection just sees a calmer profile. `attenuate_demand_peaks` and `attenuate_feedin_peaks` do the same for one side only.
+
+The maximum is a single value out of the horizon, which leaves one gap: a load spike the schedule cannot touch — an oven, a heat pump defrost — fixes it, and the penalty then has nothing left to win below it. Charging flat out against the spike scores the same as spreading the same energy over the window, and the solver may pick either.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-peak-dark.svg">

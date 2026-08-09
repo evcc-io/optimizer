@@ -107,7 +107,11 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
               // the config module reaps a solver that outlived its worker anyway.
               // the access log is the only source of per request latency. %(D)s is the
               // response time in microseconds, the rest of the format stays lean on purpose.
-              value: '--workers 1 --timeout 60 --max-requests 100 --max-requests-jitter 500 --config python:optimizer.gunicorn_conf --access-logfile - --access-logformat \'%(m)s %(U)s %(s)s %(D)s\''
+              // the jitter is a spread around max-requests, not a second budget: at 500 against
+              // 100 a worker recycled somewhere between 100 and 600 requests, so at roughly one
+              // request per second per replica it restarted every 2 to 10 minutes and paid a cold
+              // start each time. 50 keeps the staggering that stops replicas recycling in lockstep.
+              value: '--workers 1 --timeout 60 --max-requests 100 --max-requests-jitter 50 --config python:optimizer.gunicorn_conf --access-logfile - --access-logformat \'%(m)s %(U)s %(s)s %(D)s\''
             }
             { name: 'JWT_TOKEN_SECRET', secretRef: 'jwt-token-secret' }
           ]
@@ -119,6 +123,23 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
               }
               periodSeconds: 5
               failureThreshold: 10
+            }
+            // without an explicit readiness probe the platform polls its own from the moment the
+            // container exists, and the app is not listening yet: importing it alone takes over
+            // three seconds before gunicorn binds. That produced 419 'readiness probe failed:
+            // connection refused' warnings and 258 container starts in 24 hours, every one of them
+            // billed cold time serving nothing.
+            {
+              type: 'readiness'
+              // tcp, not http against the health route. One worker per replica means a ten second
+              // solve owns the whole process, so an http probe would time out mid solve and take
+              // a healthy replica out of rotation for doing exactly what it is there to do.
+              tcpSocket: {
+                port: 7050
+              }
+              initialDelaySeconds: 20
+              periodSeconds: 10
+              failureThreshold: 6
             }
           ]
         }

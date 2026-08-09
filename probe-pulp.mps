@@ -1,0 +1,30 @@
+*SENSE:Maximize
+NAME          MODEL
+ROWS
+ N  OBJ
+ L  C0000000
+COLUMNS
+    MARK      'MARKER'                 'INTORG'
+    X0000000  C0000000   1.000000000000e+00
+    X0000000  OBJ        1.000000000000e+00
+    MARK      'MARKER'                 'INTEND'
+    MARK      'MARKER'                 'INTORG'
+    X0000001  C0000000   1.000000000000e+00
+    X0000001  OBJ        1.000000000000e+00
+    MARK      'MARKER'                 'INTEND'
+    MARK      'MARKER'                 'INTORG'
+    X0000002  C0000000   1.000000000000e+00
+    X0000002  OBJ        1.000000000000e+00
+    MARK      'MARKER'                 'INTEND'
+    MARK      'MARKER'                 'INTORG'
+    X0000003  C0000000   1.000000000000e+00
+    X0000003  OBJ        1.000000000000e+00
+    MARK      'MARKER'                 'INTEND'
+RHS
+    RHS       C0000000   2.000000000000e+00
+BOUNDS
+ BV BND       X0000000
+ BV BND       X0000001
+ BV BND       X0000002
+ BV BND       X0000003
+ENDATA
