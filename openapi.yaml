@@ -289,21 +289,20 @@ components:
           description: Duration in seconds for each time step (s)
           example: [3600, 3600, 3600, 3600, 3600, 3600]
         gt:
-          type: array
-          items:
-            type: number
-            minimum: 0
-          description: Household energy demand at each time step (Wh)
+          x-go-type: BaseLoads
+          oneOf:
+            - type: array
+              items:
+                type: number
+                minimum: 0
+            - type: array
+              items:
+                type: array
+                items:
+                  type: number
+                  minimum: 0
+          description: Household energy demand at each time step (Wh), either a single series or one series per base load, which are summed up
           example: [3000, 4000, 5000, 4500, 3500, 3000]
-        gt_add:
-          type: array
-          items:
-            type: array
-            items:
-              type: number
-              minimum: 0
-          description: Additional household energy demand time series (Wh), added to gt before optimizing
-          example: [[500, 500, 500, 500, 500, 500]]
         ft:
           type: array
           items:

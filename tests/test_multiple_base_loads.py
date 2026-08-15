@@ -11,19 +11,28 @@ def request_with(time_series):
     }
 
 
-def test_additional_base_loads_are_summed_into_gt():
+def test_base_loads_are_summed_into_gt():
     client = app.test_client()
 
-    split = client.post("/optimize/charge-schedule", json=request_with({"gt": [400, 500], "gt_add": [[100, 200], [500, 300]]}))
+    split = client.post("/optimize/charge-schedule", json=request_with({"gt": [[400, 500], [100, 200], [500, 300]]}))
     summed = client.post("/optimize/charge-schedule", json=request_with({"gt": [1000, 1000]}))
 
     assert split.status_code == 200, split.json
+    assert summed.status_code == 200, summed.json
     assert split.json == summed.json
 
 
-def test_additional_base_load_of_different_length_is_rejected():
+def test_a_single_base_load_may_be_nested():
     client = app.test_client()
 
-    response = client.post("/optimize/charge-schedule", json=request_with({"gt": [1000, 1000], "gt_add": [[100]]}))
+    response = client.post("/optimize/charge-schedule", json=request_with({"gt": [[1000, 1000]]}))
+
+    assert response.status_code == 200, response.json
+
+
+def test_base_load_of_different_length_is_rejected():
+    client = app.test_client()
+
+    response = client.post("/optimize/charge-schedule", json=request_with({"gt": [[1000, 1000], [100]]}))
 
     assert response.status_code == 400, response.json

@@ -119,10 +119,16 @@ battery_config_model = api.model('BatteryConfig', {
     'c_priority': fields.Integer(required=False, description='Charging and discharging priority compared to other batteries. 2 = highest priority.')
 })
 
+
+class AnySchema(fields.Raw):
+    """Field without a type constraint, gt takes a number or a nested series per entry."""
+    __schema_type__ = None
+
+
 time_series_model = api.model('TimeSeries', {
     'dt': fields.List(fields.Float, required=True, description='duration in seconds for each time step (s)'),
-    'gt': fields.List(fields.Float, required=True, description='Required energy for home consumption at each time step (Wh)'),
-    'gt_add': fields.List(fields.List(fields.Float), required=False, description='Additional home consumption time series (Wh), added to gt before optimizing'),
+    'gt': fields.List(AnySchema, required=True,
+                      description='Required energy for home consumption at each time step (Wh), either one series or a list of series that are summed up'),
     'ft': fields.List(fields.Float, required=True, description='Forecasted solar generation at each time step (Wh)'),
     'p_N': fields.List(fields.Float, required=True, description='Price per Wh taken from grid at each time step'),
     'p_E': fields.List(fields.Float, required=True, description='Remuneration per Wh fed into grid at each time step'),
@@ -212,12 +218,15 @@ class OptimizeCharging(Resource):
 
             # Parse time series data
             ts_data = data['time_series']
-            gt_add = ts_data.get('gt_add') or []
+
+            # gt carries either a single consumption series or one series per base load, the
+            # latter are summed up. anything but a list of lists stays the single series case
+            gt = ts_data['gt']
+            base_loads = gt if gt and all(isinstance(load, list) for load in gt) else [gt]
 
             # Validate time series lengths
-            lengths = [len(ts_data['gt']), len(ts_data['ft']),
-                       len(ts_data['p_N']), len(ts_data['p_E']),
-                       *(len(gt) for gt in gt_add)]
+            lengths = [len(ts_data['ft']), len(ts_data['p_N']), len(ts_data['p_E']),
+                       *(len(load) for load in base_loads)]
 
             # Validate p_demand if provided
             for bat in batteries:
@@ -234,7 +243,7 @@ class OptimizeCharging(Resource):
 
             time_series = TimeSeriesData(
                 dt=ts_data['dt'],
-                gt=[sum(step) for step in zip(ts_data['gt'], *gt_add)] if gt_add else ts_data['gt'],
+                gt=[sum(step) for step in zip(*base_loads)],
                 ft=ts_data['ft'],
                 p_N=ts_data['p_N'],
                 p_E=ts_data['p_E'],
