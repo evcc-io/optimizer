@@ -122,6 +122,7 @@ battery_config_model = api.model('BatteryConfig', {
 time_series_model = api.model('TimeSeries', {
     'dt': fields.List(fields.Float, required=True, description='duration in seconds for each time step (s)'),
     'gt': fields.List(fields.Float, required=True, description='Required energy for home consumption at each time step (Wh)'),
+    'gt_add': fields.List(fields.List(fields.Float), required=False, description='Additional home consumption time series (Wh), added to gt before optimizing'),
     'ft': fields.List(fields.Float, required=True, description='Forecasted solar generation at each time step (Wh)'),
     'p_N': fields.List(fields.Float, required=True, description='Price per Wh taken from grid at each time step'),
     'p_E': fields.List(fields.Float, required=True, description='Remuneration per Wh fed into grid at each time step'),
@@ -210,17 +211,13 @@ class OptimizeCharging(Resource):
                 ))
 
             # Parse time series data
-            time_series = TimeSeriesData(
-                dt=data['time_series']['dt'],
-                gt=data['time_series']['gt'],
-                ft=data['time_series']['ft'],
-                p_N=data['time_series']['p_N'],
-                p_E=data['time_series']['p_E'],
-            )
+            ts_data = data['time_series']
+            gt_add = ts_data.get('gt_add') or []
 
             # Validate time series lengths
-            lengths = [len(time_series.gt), len(time_series.ft),
-                       len(time_series.p_N), len(time_series.p_E)]
+            lengths = [len(ts_data['gt']), len(ts_data['ft']),
+                       len(ts_data['p_N']), len(ts_data['p_E']),
+                       *(len(gt) for gt in gt_add)]
 
             # Validate p_demand if provided
             for bat in batteries:
@@ -234,6 +231,14 @@ class OptimizeCharging(Resource):
 
             if len(set(lengths)) > 1:
                 api.abort(400, "All time series must have the same length")
+
+            time_series = TimeSeriesData(
+                dt=ts_data['dt'],
+                gt=[sum(step) for step in zip(ts_data['gt'], *gt_add)] if gt_add else ts_data['gt'],
+                ft=ts_data['ft'],
+                p_N=ts_data['p_N'],
+                p_E=ts_data['p_E'],
+            )
 
         except Exception as e:
             api.abort(400, f"Invalid data format: {str(e)}")

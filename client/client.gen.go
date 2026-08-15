@@ -247,6 +247,9 @@ type TimeSeries struct {
 	// Gt Household energy demand at each time step (Wh)
 	Gt []float32 `json:"gt"`
 
+	// GtAdd Additional household energy demand time series (Wh), added to gt before optimizing
+	GtAdd [][]float32 `json:"gt_add,omitempty"`
+
 	// PE Grid export remuneration per Wh at each time step (currency units/Wh)
 	PE []float32 `json:"p_E"`
 

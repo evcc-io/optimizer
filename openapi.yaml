@@ -295,6 +295,15 @@ components:
             minimum: 0
           description: Household energy demand at each time step (Wh)
           example: [3000, 4000, 5000, 4500, 3500, 3000]
+        gt_add:
+          type: array
+          items:
+            type: array
+            items:
+              type: number
+              minimum: 0
+          description: Additional household energy demand time series (Wh), added to gt before optimizing
+          example: [[500, 500, 500, 500, 500, 500]]
         ft:
           type: array
           items:
