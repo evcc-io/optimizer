@@ -71,6 +71,12 @@ type BatteryConfig struct {
 	//   - False: (default) The battery cannot be discharged while power is exported to the grid.
 	DischargeToGrid bool `json:"discharge_to_grid,omitempty"`
 
+	// EtaC Charging efficiency (0 to 1). Overrides the top level eta_c for this battery.
+	EtaC float32 `json:"eta_c,omitempty"`
+
+	// EtaD Discharging efficiency (0 to 1). Overrides the top level eta_d for this battery.
+	EtaD float32 `json:"eta_d,omitempty"`
+
 	// PA Monetary value of the stored energy per Wh at end of time horizon
 	PA float32 `json:"p_a"`
 
@@ -142,10 +148,10 @@ type OptimizationInput struct {
 	// Batteries Configuration for all batteries in the system
 	Batteries []BatteryConfig `json:"batteries"`
 
-	// EtaC Charging efficiency (0 to 1)
+	// EtaC Default charging efficiency (0 to 1) for batteries without their own eta_c
 	EtaC float32 `json:"eta_c,omitempty"`
 
-	// EtaD Discharging efficiency (0 to 1)
+	// EtaD Default discharging efficiency (0 to 1) for batteries without their own eta_d
 	EtaD       float32           `json:"eta_d,omitempty"`
 	Grid       GridConfig        `json:"grid,omitempty"`
 	Strategy   OptimizerStrategy `json:"strategy,omitempty"`
