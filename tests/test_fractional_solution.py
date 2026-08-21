@@ -37,7 +37,7 @@ def test_a_preference_stage_without_an_integer_solution_is_not_kept(monkeypatch)
         calls.append(1)
         if len(calls) == 1:          # the cost stage, left alone
             return real_solve(*args, **kwargs)
-        relax(optimizer)             # the preference stage, out of time and empty handed
+        relax(optimizer)             # both tie break solves, out of time and empty handed
         optimizer.problem.status = pulp.LpStatusNotSolved
         optimizer.problem.sol_status = pulp.LpSolutionNoSolutionFound
         return optimizer.problem.status
@@ -45,7 +45,8 @@ def test_a_preference_stage_without_an_integer_solution_is_not_kept(monkeypatch)
     monkeypatch.setattr(optimizer.problem, 'solve', solve)
     optimizer.solve()
 
-    assert len(calls) == 2, f'the preference stage did not run, {len(calls)} solves'
+    # the cost stage, then the two the tie break makes: the pinned LP floor and the MILP
+    assert len(calls) == 3, f'the preference stage did not run both solves, {len(calls)} solves'
     assert optimizer.preference_stage.endswith('kept the first stage'), \
         f'preference stage ended as {optimizer.preference_stage}'
     for var in binaries(optimizer):
