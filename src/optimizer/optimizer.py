@@ -123,6 +123,15 @@ PROBE_SHARE = 0.2
 # of a 5 s limit is 1.25 s.
 PREFERENCE_TIME_SHARE = 0.4
 
+# clock the tie break MILP may spend. Distinct from PREFERENCE_TIME_SHARE, which is what the
+# cost stage may not eat: the reserve seats the stage, this caps its spend. Measured over 16
+# captured production splits, the MILP finds everything it will find within 2.5 s - capping
+# there returned the identical preference value on 15 of 16, the 16th lost 1.7e-6, and every
+# deep tail request got the rest of its 4 s slice back as response time. The first incumbent
+# lands around 1.3 s and the 245 step model seats in 1.6 s, so 2.5 keeps margin over both.
+# Requests without a time limit stay uncapped, they asked to be solved out.
+MILP_PREFERENCE_TIME_LIMIT = 2.5
+
 # clock the pinned LP tie break may use. It is a linear program over a schedule that is already
 # feasible, worst measured 0.165 s over the stored cases, so this is a guard against a pathological
 # model rather than a budget. It runs even once the deadline is gone: without it a request that
@@ -868,7 +877,8 @@ class Optimizer:
             stages.append('no time')
         else:
             if remaining is not None:
-                remaining = min(remaining, self.settings.time_limit * PREFERENCE_TIME_SHARE)
+                remaining = min(remaining, self.settings.time_limit * PREFERENCE_TIME_SHARE,
+                                MILP_PREFERENCE_TIME_LIMIT)
             # no warm start, although a feasible solution is right there in the variables. The CBC
             # binary pulp ships, 2.10.3 built Dec 2019, mishandles a MIP start on this model: it
             # returns a strictly worse schedule and reports it as proven optimal, and it declares
