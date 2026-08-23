@@ -48,6 +48,29 @@ def solve_cost_only(optimizer):
     return optimizer
 
 
+def test_the_lp_floor_relaxes_a_bound_cbc_reports_infeasible(monkeypatch):
+    # production: CBC declares the pinned LP infeasible over a cost bound the incumbent it just
+    # returned satisfies -- the model's big M rows put the solver's perturbation orders above the
+    # slack. The floor must walk COST_BOUND_SLACK up rather than give up the tie break.
+    optimizer = solve_cost_only(build('026-attenuate-grid-peaks'))
+    calls = {'n': 0}
+    real_solve = pulp.LpProblem.solve
+
+    def infeasible_twice(self, solver):
+        result = real_solve(self, solver)
+        calls['n'] += 1
+        if calls['n'] <= 2:
+            self.status = pulp.LpStatusInfeasible
+        return result
+
+    monkeypatch.setattr(pulp.LpProblem, 'solve', infeasible_twice)
+    with TemporaryDirectory() as tmpdir:
+        optimizer._solve_preferences(tmpdir, None)
+
+    # two refusals walk the slack from 1e-5 over 1e-4 to 1e-3, and the tie break still lands
+    assert 'LP (slack 0.001) Optimal' in optimizer.preference_stage
+
+
 @pytest.mark.parametrize('case', CASES)
 def test_objective_split_covers_the_whole_objective(case):
     # the split must stay exhaustive: cost plus preferences has to equal what a single solve would
