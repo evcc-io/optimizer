@@ -1,5 +1,6 @@
 import shutil
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from tempfile import TemporaryDirectory
 from typing import Dict, List, Optional
@@ -202,6 +203,9 @@ class Optimizer:
         self.cost_stage_value = None
         # 'joint' when the probe proved the whole objective, 'split' when it fell back
         self.solve_path = None
+        # wall clock per stage of the last solve(), keyed build/probe/cost/tie_break. What the
+        # response time was spent on, where the access log only carries the total.
+        self.stage_seconds = {}
         # dictionary of optimizer variables
         self.variables = {}
 
@@ -729,6 +733,19 @@ class Optimizer:
         solver.tmpDir = tmpdir
         return solver
 
+    @contextmanager
+    def _timed(self, stage):
+        """Add the wall clock of the enclosed block to stage_seconds.
+
+        Accumulating rather than assigning, because the tie break is two solves under one name.
+        """
+        started = time.monotonic()
+        try:
+            yield
+        finally:
+            self.stage_seconds[stage] = round(
+                self.stage_seconds.get(stage, 0.) + time.monotonic() - started, 4)
+
     def _pin_integers(self):
         """Freeze every integer variable on the value it currently holds, undo data returned.
 
@@ -817,7 +834,8 @@ class Optimizer:
         # clock says and the strategies get something even when the search below never starts.
         pinned = self._pin_integers()
         try:
-            self.problem.solve(self._solver(tmpdir, timeLimit=LP_PREFERENCE_TIME_LIMIT))
+            with self._timed('tie_break'):
+                self.problem.solve(self._solver(tmpdir, timeLimit=LP_PREFERENCE_TIME_LIMIT))
             stages.append('LP ' + pulp.LpStatus[self.problem.status] + ('' if keep() else ' unused'))
         finally:
             self._unpin_integers(pinned)
@@ -839,7 +857,8 @@ class Optimizer:
             # a single joint solve to the last digit. Fixed upstream, the same LP and the same start
             # file come back identical to the cold run on CBC 2.10.13, but the image ships 2.10.10
             # and that one has not been checked, so this stays until it is.
-            self.problem.solve(self._solver(tmpdir, timeLimit=remaining))
+            with self._timed('tie_break'):
+                self.problem.solve(self._solver(tmpdir, timeLimit=remaining))
             stages.append('MILP ' + pulp.LpStatus[self.problem.status]
                           + ('' if keep() else ' unused'))
 
@@ -864,7 +883,8 @@ class Optimizer:
         if probe is None and self.settings.time_limit is not None:
             probe = self.settings.time_limit * PROBE_SHARE
         if probe != 0:
-            self.problem.solve(self._solver(tmpdir, timeLimit=probe))
+            with self._timed('probe'):
+                self.problem.solve(self._solver(tmpdir, timeLimit=probe))
 
         # sol_status, not status: pulp reports LpStatusOptimal whenever CBC came back with any
         # feasible solution, including one it stopped on at the time limit. Measured on a captured
@@ -896,8 +916,9 @@ class Optimizer:
         reserve = (0. if self.settings.time_limit is None
                    else self.settings.time_limit * PREFERENCE_TIME_SHARE)
         remaining = None if deadline is None else max(deadline - reserve - time.monotonic(), 0.1)
-        self.problem.solve(self._solver(tmpdir, timeLimit=remaining,
-                                        gapAbs=None if gap_abs is None else gap_abs * scale))
+        with self._timed('cost'):
+            self.problem.solve(self._solver(tmpdir, timeLimit=remaining,
+                                            gapAbs=None if gap_abs is None else gap_abs * scale))
 
         if pulp.LpStatus[self.problem.status] == 'Optimal':
             # the cost stage is allowed to stop on its gap, so LpSolutionOptimal is not required of
@@ -926,8 +947,10 @@ class Optimizer:
         Returns a dictionary with the optimization results
         """
 
+        self.stage_seconds = {}
         if self.problem is None:
-            self.create_model()
+            with self._timed('build'):
+                self.create_model()
 
         # both stages share one wall clock, so a second solve cannot double the response time
         deadline = None if self.settings.time_limit is None else time.monotonic() + self.settings.time_limit

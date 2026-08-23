@@ -138,6 +138,23 @@ def test_slow_requests_are_dumped(tmp_path, monkeypatch):
     assert json.loads(lines[1])["elapsed"] > 0
 
 
+def test_every_request_logs_a_solve_line(capsys):
+    # the key names are the Log Analytics contract: the dashboard's KQL queries parse this line,
+    # so renaming one breaks production attribution silently
+    request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
+    client = app.test_client()
+    client.post("/optimize/charge-schedule", json=request)
+
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+             if line.startswith('{"solve"')]
+    assert len(lines) == 1, "every request logs exactly one solve line"
+    solve = lines[0]["solve"]
+    assert {"elapsed", "stages", "path", "preferences", "status", "steps"} <= set(solve)
+    assert solve["elapsed"] > 0
+    assert solve["stages"] and set(solve["stages"]) <= {"build", "probe", "cost", "tie_break"}
+    assert solve["steps"] == len(request["time_series"]["dt"])
+
+
 def test_abort_returns_json_message():
     # message-only api.abort(400, ...) must return a JSON body, not an empty response
     client = app.test_client()
