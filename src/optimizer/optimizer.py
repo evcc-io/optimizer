@@ -82,6 +82,15 @@ COST_BOUND = 'cost_bound'
 # those requests but no money, see the fallback in _solve_preferences.
 COST_BOUND_SLACK = 1e-5
 
+# ceiling for the slack ladder in _solve_preferences. CBC declares the pinned tie break LP
+# infeasible on some production splits over a bound its own incumbent satisfies: the model's
+# big M rows put CBC's solve-time perturbation orders above any hundredth-of-a-cent slack, and
+# no algorithm switch helps (primal, dual, barrier and perturbation-off all agree). Measured on
+# two captured requests, feasibility returns at 3e-4 and 1e-3. Each retry multiplies the slack
+# by ten, so the ceiling is reached in three; it equals the default gap_abs, money the cost
+# stage may already have left on the table, and the alternative is no tie break at all.
+COST_BOUND_SLACK_CEILING = 1e-2
+
 # how far below the bound the check in _solve_preferences still accepts a solution. CBC treats
 # that row like any other, so it may miss it by its feasibility tolerance: measured at 1.2e-5 on
 # 024-attenuate-demand-peaks, where rejecting over it threw away a tie break worth four times the
@@ -113,6 +122,15 @@ PROBE_SHARE = 0.2
 # time the cost stage could have used. The MILP tie break needs 1.6 s on a 245 step model, and 0.25
 # of a 5 s limit is 1.25 s.
 PREFERENCE_TIME_SHARE = 0.4
+
+# clock the tie break MILP may spend. Distinct from PREFERENCE_TIME_SHARE, which is what the
+# cost stage may not eat: the reserve seats the stage, this caps its spend. Measured over 16
+# captured production splits, the MILP finds everything it will find within 2.5 s - capping
+# there returned the identical preference value on 15 of 16, the 16th lost 1.7e-6, and every
+# deep tail request got the rest of its 4 s slice back as response time. The first incumbent
+# lands around 1.3 s and the 245 step model seats in 1.6 s, so 2.5 keeps margin over both.
+# Requests without a time limit stay uncapped, they asked to be solved out.
+MILP_PREFERENCE_TIME_LIMIT = 2.5
 
 # clock the pinned LP tie break may use. It is a linear program over a schedule that is already
 # feasible, worst measured 0.165 s over the stored cases, so this is a guard against a pathological
@@ -834,9 +852,20 @@ class Optimizer:
         # clock says and the strategies get something even when the search below never starts.
         pinned = self._pin_integers()
         try:
+            slack = COST_BOUND_SLACK
             with self._timed('tie_break'):
                 self.problem.solve(self._solver(tmpdir, timeLimit=LP_PREFERENCE_TIME_LIMIT))
-            stages.append('LP ' + pulp.LpStatus[self.problem.status] + ('' if keep() else ' unused'))
+                # CBC declares this LP infeasible on ~6% of production splits, over a bound the
+                # incumbent it just returned satisfies, see COST_BOUND_SLACK_CEILING. Walk the
+                # slack up until CBC can hold the row; keep() follows via budget.
+                while (pulp.LpStatus[self.problem.status] == 'Infeasible'
+                       and slack < COST_BOUND_SLACK_CEILING):
+                    slack *= 10
+                    budget = self.settings.preference_budget + slack
+                    self.problem.constraints[COST_BOUND].constant = -(cost - budget)
+                    self.problem.solve(self._solver(tmpdir, timeLimit=LP_PREFERENCE_TIME_LIMIT))
+            label = 'LP' if slack == COST_BOUND_SLACK else f'LP (slack {slack:g})'
+            stages.append(label + ' ' + pulp.LpStatus[self.problem.status] + ('' if keep() else ' unused'))
         finally:
             self._unpin_integers(pinned)
 
@@ -848,7 +877,8 @@ class Optimizer:
             stages.append('no time')
         else:
             if remaining is not None:
-                remaining = min(remaining, self.settings.time_limit * PREFERENCE_TIME_SHARE)
+                remaining = min(remaining, self.settings.time_limit * PREFERENCE_TIME_SHARE,
+                                MILP_PREFERENCE_TIME_LIMIT)
             # no warm start, although a feasible solution is right there in the variables. The CBC
             # binary pulp ships, 2.10.3 built Dec 2019, mishandles a MIP start on this model: it
             # returns a strictly worse schedule and reports it as proven optimal, and it declares
