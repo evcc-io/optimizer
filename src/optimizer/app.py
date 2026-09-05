@@ -74,16 +74,20 @@ api = Api(app, version='1.0', title='EV Charging Optimization API',
 
 @api.errorhandler(BadRequest)
 def handle_validation_error(error):
-    """Rename 'errors' to 'details' in validation responses."""
-    if error.data and 'errors' in error.data:
-        error.data['details'] = error.data['errors']
-        del error.data['errors']
-        return error.data, 400
-    elif error.data:
-        # plain api.abort(400, message) calls carry only a message
-        return error.data, 400
-    else:
-        raise error
+    """Return JSON and log the cause without logging rejected request values."""
+    data = getattr(error, 'data', None)
+    reason = data.get('message', error.description).partition(':')[0] if data else 'Invalid request body'
+    error.data = data or {'message': error.description}
+    if 'errors' in error.data:
+        error.data['details'] = error.data.pop('errors')
+
+    print(json.dumps({'bad_request': {
+        'path': request.path,
+        'reason': reason,
+        'fields': sorted(error.data.get('details', {})),
+        'validator': getattr(error.__context__, 'validator', None),
+    }}), flush=True)
+    return error.data, 400
 
 
 # Namespace for the API
@@ -235,6 +239,8 @@ class OptimizeCharging(Resource):
             if len(set(lengths)) > 1:
                 api.abort(400, "All time series must have the same length")
 
+        except BadRequest:
+            raise
         except Exception as e:
             api.abort(400, f"Invalid data format: {str(e)}")
 
