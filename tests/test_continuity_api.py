@@ -1,20 +1,18 @@
-from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import numpy as np
 import pytest
 from test_continuity import build, seed_fragmented, starts
 
 from optimizer.app import app
+from optimizer.optimizer import Optimizer
 
 
 @pytest.mark.parametrize('second_c_min', [None, 0, 1000])
 def test_api_returns_continuous_equal_price_sessions(second_c_min: float | None):
     model = build()
     if second_c_min is not None:
-        battery = deepcopy(model.batteries[0])
-        battery.c_min = second_c_min
-        model.batteries.append(battery)
+        model.batteries.append(replace(model.batteries[0], c_min=second_c_min))
     request = {
         'batteries': [{key: value for key, value in asdict(battery).items() if value is not None} for battery in model.batteries],
         'time_series': asdict(model.time_series),
@@ -41,7 +39,7 @@ def test_each_grid_peak_is_preserved(monkeypatch: pytest.MonkeyPatch, strategy: 
     model.time_series.ft = [0, 0, 0, 0, 2000, 0]
     seed_fragmented(model, monkeypatch)
     with monkeypatch.context() as context:
-        context.setattr('optimizer.optimizer.minimize_interruptions', lambda *args: None)
+        context.setattr(Optimizer, '_solve_continuity', lambda *args: None)
         original = model.solve()
 
     result = model.solve()

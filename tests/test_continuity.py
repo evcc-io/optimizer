@@ -1,11 +1,11 @@
 import time
 from tempfile import TemporaryDirectory
+from typing import Literal, assert_never
 
 import numpy as np
 import pulp
 import pytest
 
-from optimizer.continuity import minimize_interruptions
 from optimizer.optimizer import BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
 
 
@@ -137,14 +137,14 @@ def test_uninterrupted_or_unrestricted_batteries_skip_the_solver(monkeypatch: py
 
     monkeypatch.setattr(model, '_solver', unexpected_solver)
     with TemporaryDirectory() as tmpdir:
-        minimize_interruptions(model, tmpdir, None)
+        model._solve_continuity(tmpdir, None)
 
 
 def fragmented_model(monkeypatch: pytest.MonkeyPatch) -> Optimizer:
     model = build()
     seed_fragmented(model, monkeypatch)
     with monkeypatch.context() as context:
-        context.setattr('optimizer.optimizer.minimize_interruptions', lambda *args: None)
+        context.setattr(Optimizer, '_solve_continuity', lambda *args: None)
         model.solve()
     return model
 
@@ -158,13 +158,13 @@ def test_expired_deadline_keeps_incumbent(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(model, '_solver', unexpected_solver)
     with TemporaryDirectory() as tmpdir:
-        minimize_interruptions(model, tmpdir, time.monotonic() - 1)
+        model._solve_continuity(tmpdir, time.monotonic() - 1)
 
     assert {var: var.varValue for var in model.problem.variables()} == solution
 
 
 @pytest.mark.parametrize('outcome', ['infeasible', 'fractional', 'error', 'invalid'])
-def test_failed_polish_restores_incumbent(monkeypatch: pytest.MonkeyPatch, outcome: str):
+def test_failed_polish_restores_incumbent(monkeypatch: pytest.MonkeyPatch, outcome: Literal['infeasible', 'fractional', 'error', 'invalid']):
     model = fragmented_model(monkeypatch)
     solution = {var: var.varValue for var in model.problem.variables()}
     status = model.problem.status, model.problem.sol_status
@@ -181,11 +181,13 @@ def test_failed_polish_restores_incumbent(monkeypatch: pytest.MonkeyPatch, outco
                 candidate.sol_status = pulp.LpSolutionNoSolutionFound
             case 'invalid':
                 candidate.sol_status = pulp.LpSolutionOptimal
+            case _:
+                assert_never(outcome)
         return pulp.LpStatusNotSolved
 
     monkeypatch.setattr(pulp.LpProblem, 'solve', failed_solve)
     with TemporaryDirectory() as tmpdir:
-        minimize_interruptions(model, tmpdir, None)
+        model._solve_continuity(tmpdir, None)
 
     assert {var: var.varValue for var in model.problem.variables()} == solution
     assert (model.problem.status, model.problem.sol_status) == status
@@ -196,7 +198,7 @@ def test_polish_does_not_upgrade_feasible_status(monkeypatch: pytest.MonkeyPatch
     model.problem.sol_status = pulp.LpSolutionIntegerFeasible
 
     with TemporaryDirectory() as tmpdir:
-        minimize_interruptions(model, tmpdir, None)
+        model._solve_continuity(tmpdir, None)
 
     assert starts([pulp.value(v) for v in model.variables['c'][0]]) == 1
     assert model.problem.sol_status == pulp.LpSolutionIntegerFeasible
@@ -212,6 +214,43 @@ def test_incomplete_incumbent_skips_polishing(monkeypatch: pytest.MonkeyPatch, v
 
     monkeypatch.setattr(model, '_solver', unexpected_solver)
     with TemporaryDirectory() as tmpdir:
-        minimize_interruptions(model, tmpdir, None)
+        model._solve_continuity(tmpdir, None)
 
     assert model.variables['c'][0][1].varValue is value
+
+
+@pytest.mark.parametrize('bound', ['cost', 'preference', 'peak'])
+def test_invalid_solver_result_cannot_bypass_bounds(monkeypatch: pytest.MonkeyPatch, bound: str):
+    model = build('attenuate_demand_peaks')
+    if bound == 'cost':
+        model.time_series.p_N = [0.001, 0.0003, 0.001, 0.0003, 0.001, 0.0003]
+    if bound == 'peak':
+        model.time_series.gt = [0, 0, 2000, 0, 2000, 0]
+    seed_fragmented(model, monkeypatch)
+    with monkeypatch.context() as context:
+        context.setattr(Optimizer, '_solve_continuity', lambda *args: None)
+        model.solve()
+    model.preference_objective = model.variables['c'][0][5] if bound == 'preference' else 0
+    if bound != 'peak':
+        model.variables['p_imp_peak'].varValue = 10000
+    solution = {var: var.varValue for var in model.problem.variables()}
+
+    def forged_result(candidate: pulp.LpProblem, *args, **kwargs):
+        for var in candidate.variables():
+            var.varValue = 0
+        energy = [0, 500, 500, 500, 0, 0]
+        for t, charge in enumerate(energy):
+            model.variables['c'][0][t].varValue = charge
+            model.variables['s'][0][t].varValue = sum(energy[:t + 1])
+            model.variables['n'][t].varValue = charge + model.time_series.gt[t]
+            model.variables['z_c'][0][t].varValue = int(charge > 0)
+        candidate.variablesDict()['charge_start_0_1'].varValue = 1
+        model.variables['p_imp_peak'].varValue = max(pulp.value(v) for v in model.variables['n']) * 4
+        candidate.sol_status = pulp.LpSolutionOptimal
+        return pulp.LpStatusOptimal
+
+    monkeypatch.setattr(pulp.LpProblem, 'solve', forged_result)
+    with TemporaryDirectory() as tmpdir:
+        model._solve_continuity(tmpdir, None)
+
+    assert {var: var.varValue for var in model.problem.variables()} == solution
