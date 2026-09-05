@@ -200,3 +200,18 @@ def test_polish_does_not_upgrade_feasible_status(monkeypatch: pytest.MonkeyPatch
 
     assert starts([pulp.value(v) for v in model.variables['c'][0]]) == 1
     assert model.problem.sol_status == pulp.LpSolutionIntegerFeasible
+
+
+@pytest.mark.parametrize('value', [None, float('nan'), float('inf')])
+def test_incomplete_incumbent_skips_polishing(monkeypatch: pytest.MonkeyPatch, value: float | None):
+    model = fragmented_model(monkeypatch)
+    model.variables['c'][0][1].varValue = value
+
+    def unexpected_solver(*args, **kwargs):
+        pytest.fail('continuity should not invoke CBC without a complete incumbent')
+
+    monkeypatch.setattr(model, '_solver', unexpected_solver)
+    with TemporaryDirectory() as tmpdir:
+        minimize_interruptions(model, tmpdir, None)
+
+    assert model.variables['c'][0][1].varValue is value

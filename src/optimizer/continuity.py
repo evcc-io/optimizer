@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from math import isfinite
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -13,9 +14,14 @@ TIME_LIMIT = 1.0
 TOLERANCE = 1e-5
 
 
+def _complete_solution(problem: pulp.LpProblem) -> bool:
+    return all(var.name == '__dummy' or (var.varValue is not None and isfinite(var.varValue)) for var in problem.variables())
+
+
 def minimize_interruptions(model: Optimizer, tmpdir: str, deadline: float | None) -> None:
     """Prefer fewer charge starts without trading away economics or existing preferences."""
-    if model.problem.sol_status not in (pulp.LpSolutionOptimal, pulp.LpSolutionIntegerFeasible) or not model._is_integral():
+    if (model.problem.sol_status not in (pulp.LpSolutionOptimal, pulp.LpSolutionIntegerFeasible)
+            or not _complete_solution(model.problem) or not model._is_integral()):
         return
 
     eligible = [i for i, active in model.variables['z_c'].items() if active is not None]
@@ -67,6 +73,7 @@ def minimize_interruptions(model: Optimizer, tmpdir: str, deadline: float | None
                 return
         candidate.solve(model._solver(tmpdir, timeLimit=remaining))
         improved = (candidate.sol_status in (pulp.LpSolutionOptimal, pulp.LpSolutionIntegerFeasible)
+                    and _complete_solution(candidate)
                     and candidate.valid(TOLERANCE)
                     and model._is_integral()
                     and pulp.value(model.cost_objective) >= cost - 2 * TOLERANCE
