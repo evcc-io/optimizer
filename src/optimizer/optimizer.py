@@ -2,6 +2,7 @@ import shutil
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from math import isfinite
 from tempfile import TemporaryDirectory
 from typing import Dict, List, Optional
 
@@ -66,6 +67,10 @@ def objective_scale(objective) -> float:
     if not coefficients:
         return 1.0
     return OBJECTIVE_TARGET / max(coefficients)
+
+
+def _complete_solution(problem: pulp.LpProblem) -> bool:
+    return all(var.name == '__dummy' or (var.varValue is not None and isfinite(var.varValue)) for var in problem.variables())
 
 
 # name of the constraint the second stage adds to keep the money the first stage found
@@ -137,6 +142,9 @@ MILP_PREFERENCE_TIME_LIMIT = 2.5
 # model rather than a budget. It runs even once the deadline is gone: without it a request that
 # spent its whole clock on the money gets no strategy at all.
 LP_PREFERENCE_TIME_LIMIT = 1.0
+
+CONTINUITY_TIME_LIMIT = 1.0
+CONTINUITY_TOLERANCE = 1e-5
 
 # a cbc on PATH is preferred over the one pulp bundles, which is 2.10.3 built Dec 2019 and gets a
 # MIP start wrong on this model, see _solve_preferences. None falls back to the bundled binary, so
@@ -899,6 +907,70 @@ class Optimizer:
             var.varValue = value
         self.problem.status = pulp.LpStatusOptimal
 
+    def _solve_continuity(self, tmpdir: str, deadline: float | None) -> None:
+        """Prefer fewer charge starts without trading away economics or existing preferences."""
+        if (self.problem.sol_status not in (pulp.LpSolutionOptimal, pulp.LpSolutionIntegerFeasible)
+                or not _complete_solution(self.problem) or not self._is_integral()):
+            return
+
+        eligible = [i for i, active in self.variables['z_c'].items() if active is not None]
+
+        def count_starts() -> list[int]:
+            counts = []
+            for i in eligible:
+                active = np.array([pulp.value(v) for v in self.variables['c'][i]]) > CONTINUITY_TOLERANCE
+                counts.append(int(np.count_nonzero(active & ~np.r_[False, active[:-1]])))
+            return counts
+
+        before = count_starts()
+        if not any(count > 1 for count in before):
+            return
+        remaining = CONTINUITY_TIME_LIMIT if deadline is None else min(CONTINUITY_TIME_LIMIT, deadline - time.monotonic())
+        if remaining <= 0:
+            return
+
+        solution = {var: var.varValue for var in self.problem.variables()}
+        cost = pulp.value(self.cost_objective)
+        preference = pulp.LpAffineExpression(self.preference_objective)
+        # Normalize tiny preference coefficients so CBC's row tolerance cannot erase their bound.
+        scale = 1 / max((abs(value) for value in preference.values() if value), default=1)
+        preference *= scale
+        preferred = pulp.value(preference)
+
+        # A shallow copy shares solution variables but leaves the reusable model's constraints intact.
+        candidate = self.problem.copy()
+        candidate += self.cost_objective >= cost - CONTINUITY_TOLERANCE
+        candidate += preference >= preferred - CONTINUITY_TOLERANCE
+        for side in self.peak_sides:
+            peak = self.variables[f'p_{side}_peak']
+            candidate += peak <= pulp.value(peak) + CONTINUITY_TOLERANCE
+        starts = []
+        for i in eligible:
+            active = self.variables['z_c'][i]
+            for t in self.time_steps:
+                start = pulp.LpVariable(f'charge_start_{i}_{t}', lowBound=0, upBound=1)
+                candidate += start >= active[t] - (active[t - 1] if t else 0)
+                starts.append(start)
+        candidate.setObjective(-pulp.lpSum(starts))
+
+        improved = False
+        try:
+            if deadline is not None:
+                remaining = min(remaining, deadline - time.monotonic())
+                if remaining <= 0:
+                    return
+            candidate.solve(self._solver(tmpdir, timeLimit=remaining))
+            if (candidate.sol_status not in (pulp.LpSolutionOptimal, pulp.LpSolutionIntegerFeasible)
+                    or not _complete_solution(candidate) or not candidate.valid(CONTINUITY_TOLERANCE)):
+                return
+            improved = sum(count_starts()) < sum(before)
+        except pulp.PulpSolverError:
+            return
+        finally:
+            if not improved:
+                for var, value in solution.items():
+                    var.varValue = value
+
     def _probe_then_split(self, tmpdir, deadline) -> None:
         """
         Solve the whole objective if it can be proved quickly, otherwise fall back to the split.
@@ -987,6 +1059,7 @@ class Optimizer:
 
         with TemporaryDirectory() as tmpdir:
             self._probe_then_split(tmpdir, deadline)
+            self._solve_continuity(tmpdir, deadline)
 
         # back to the total worth of the solution, neither stage objective on its own
         self.problem.setObjective((self.cost_objective + self.preference_objective) * self.objective_scale)
