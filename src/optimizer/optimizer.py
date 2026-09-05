@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pulp
 
+from .continuity import minimize_interruptions
 from .settings import OptimizerSettings
 
 
@@ -868,6 +869,7 @@ class Optimizer:
 
         with TemporaryDirectory() as tmpdir:
             self._probe_then_split(tmpdir, deadline)
+            minimize_interruptions(self, tmpdir, deadline)
 
         # back to the total worth of the solution, neither stage objective on its own
         self.problem.setObjective((self.cost_objective + self.preference_objective) * self.objective_scale)
