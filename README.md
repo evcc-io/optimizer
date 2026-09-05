@@ -46,6 +46,12 @@ The maximum is a single value out of the horizon, which leaves one gap: a load s
   <img alt="Grid exchange over 24 hours without a strategy and with attenuate_grid_peaks, showing the import peak dropping from 11.5 kW to 3.6 kW" src="docs/img/example-peak-light.svg">
 </picture>
 
+## Fewer charging interruptions
+
+For batteries with a positive minimum charge power (`c_min`), a final tie-break pass prefers fewer charging starts. It preserves the achieved economic objective, existing strategy preferences, and grid peaks within numerical tolerances. This is automatic and needs no additional API setting.
+
+The pass only runs when a battery has multiple charging sessions and gets at most one second of solver time within the remaining request budget. If it cannot find a valid improvement, the previous schedule is retained. Power may still vary within a session, and cheaper prices, charging demands, or grid shaping may still require interruptions. This is a preference, not a guarantee of one continuous session.
+
 ## API
 
 `POST /optimize/charge-schedule` takes the whole problem as one JSON document and returns the schedule. `GET /optimize/health` is the liveness probe. Every field is documented in [`openapi.yaml`](openapi.yaml).
