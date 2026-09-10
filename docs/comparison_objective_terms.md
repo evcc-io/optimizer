@@ -42,5 +42,6 @@
   `c_min > 0`. It bounds both achieved objectives and each leveled grid peak separately, so fewer
   interruptions cannot compensate for worse economics, preferences, or peaks beyond numerical
   tolerances. This pass adds no term to either earlier objective. It runs only for fragmented
-  schedules, uses at most one second of solver time within the remaining request budget, and
-  retains the incumbent unless a valid schedule has fewer actual starts.
+  schedules, uses at most one second of solver time within the remaining request budget, is
+  skipped when the solve that produced the incumbent already took longer than that, and retains
+  the incumbent unless a valid schedule has fewer actual starts.

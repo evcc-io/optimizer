@@ -923,6 +923,9 @@ class Optimizer:
 
         A device reported as charging enters the horizon switched on, so keeping it on is free and
         interrupting it costs a start.
+
+        Leaves continuity_stage behind, the way the tie break leaves preference_stage: what the
+        stage did, or why it did nothing, one string per solve for the request log.
         """
         if (self.problem.sol_status not in (pulp.LpSolutionOptimal, pulp.LpSolutionIntegerFeasible)
                 or not _complete_solution(self.problem) or not self._is_integral()):
@@ -944,8 +947,18 @@ class Optimizer:
         # a device that is charging already can reach zero starts, one that is idle needs one
         if all(count <= 1 - charging_now(i) for i, count in zip(eligible, before)):
             return
+        # the candidate is this model plus a start per step, under a bound on the cost it just
+        # optimized, so it is the harder problem: it does not finish inside a second where the
+        # incumbent took longer than that. Measured over five days of production, 14 % of joint
+        # solves ran this stage and half of those sat on the cap with nothing to show (#146). The
+        # incumbent's own clock says which ones they are before a second is spent.
+        spent = self.stage_seconds.get('probe', 0.) + self.stage_seconds.get('cost', 0.)
+        if spent > CONTINUITY_TIME_LIMIT:
+            self.continuity_stage = f'skipped, solve took {spent:.1f} s'
+            return
         remaining = CONTINUITY_TIME_LIMIT if deadline is None else min(CONTINUITY_TIME_LIMIT, deadline - time.monotonic())
         if remaining <= 0:
+            self.continuity_stage = 'no time'
             return
 
         solution = {var: var.varValue for var in self.problem.variables()}
@@ -977,20 +990,27 @@ class Optimizer:
             if deadline is not None:
                 remaining = min(remaining, deadline - time.monotonic())
                 if remaining <= 0:
+                    self.continuity_stage = 'no time'
                     return
-            candidate.solve(self._solver(tmpdir, timeLimit=remaining))
+            with self._timed('continuity'):
+                candidate.solve(self._solver(tmpdir, timeLimit=remaining))
+            self.continuity_stage = 'MILP ' + pulp.LpStatus[candidate.status] + ' unused'
             if (candidate.sol_status not in (pulp.LpSolutionOptimal, pulp.LpSolutionIntegerFeasible)
                     or not _complete_solution(candidate) or not self._is_integral()):
                 return
             # CBC writes its solution with 8 significant digits, so a balance row over a 40 kWh
             # SOC comes back off by up to 1e-3 and candidate.valid(1e-5) rejects every candidate
             # (#146). CBC already held the model rows; only the bounds added here need checking.
+            after = count_starts()
             improved = (pulp.value(self.cost_objective) >= cost - 2 * CONTINUITY_TOLERANCE
                         and pulp.value(preference) >= preferred - 2 * CONTINUITY_TOLERANCE
                         and all(pulp.value(self.variables[f'p_{side}_peak']) <= peak_values[side] + 2 * CONTINUITY_TOLERANCE
                                 for side in self.peak_sides)
-                        and sum(count_starts()) < sum(before))
+                        and sum(after) < sum(before))
+            if improved:
+                self.continuity_stage = f'improved {sum(before)} to {sum(after)}'
         except pulp.PulpSolverError:
+            self.continuity_stage = 'solver error'
             return
         finally:
             if not improved:
@@ -1091,6 +1111,7 @@ class Optimizer:
         """
 
         self.stage_seconds = {}
+        self.continuity_stage = 'not needed'
         if self.problem is None:
             with self._timed('build'):
                 self.create_model()

@@ -277,6 +277,7 @@ class OptimizeCharging(Resource):
                 "stages": optimizer.stage_seconds,
                 "path": optimizer.solve_path,
                 "preferences": optimizer.preference_stage,
+                "continuity": optimizer.continuity_stage,
                 "status": result.get('status'),
                 "steps": optimizer.T,
             }}), flush=True)
