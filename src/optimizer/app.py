@@ -46,20 +46,29 @@ def money(value):
     return None if value is None else round(value, 4)
 
 
-def dump_slow_request(payload, elapsed):
-    """Persist requests that exhausted the solver time limit, they are the ones worth replaying.
+# money the capped cost stage may leave unproven between its schedule and CBC's bound before
+# the request is dumped for replay. The cap keeps requests short of the time limit, so the gap
+# is what marks the ones worth replaying at a longer clock.
+DUMP_GAP = 1.0
+
+
+def dump_slow_request(payload, elapsed, gap):
+    """Persist requests worth replaying: those that exhausted the solver time limit, and those
+    the cost stage left more than DUMP_GAP of money unproven on.
 
     The elapsed time covers model building as well as solving, so a request that only exceeds
     the limit while building is caught too. That one is equally worth looking at.
     """
     path, limit = settings.dump_slow_requests, settings.time_limit
-    if not path or limit is None or elapsed < limit:
+    slow = limit is not None and elapsed >= limit
+    unproven = gap is not None and gap > DUMP_GAP
+    if not path or not (slow or unproven):
         return
 
     # one line per request, carrying the same "request" key as test_cases/*.json so a line
     # can be replayed by the existing harness
     line = json.dumps({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                       "elapsed": round(elapsed, 3), "request": payload}) + "\n"
+                       "elapsed": round(elapsed, 3), "gap": money(gap), "request": payload}) + "\n"
     try:
         pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a") as f:
@@ -287,7 +296,7 @@ class OptimizeCharging(Resource):
                 "steps": optimizer.T,
             }}), flush=True)
 
-            dump_slow_request(data, elapsed)
+            dump_slow_request(data, elapsed, optimizer.cost_stage_gap)
             return result
 
         except Exception as e:
