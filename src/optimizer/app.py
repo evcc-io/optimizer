@@ -41,6 +41,11 @@ def before_request_func():
             return jsonify({"message": str(e)}), 401
 
 
+def money(value):
+    """Currency for the request log, or None where a stage did not run."""
+    return None if value is None else round(value, 4)
+
+
 def dump_slow_request(payload, elapsed):
     """Persist requests that exhausted the solver time limit, they are the ones worth replaying.
 
@@ -276,6 +281,8 @@ class OptimizeCharging(Resource):
                 "path": optimizer.solve_path,
                 "preferences": optimizer.preference_stage,
                 "continuity": optimizer.continuity_stage,
+                "cost_stage_value": money(optimizer.cost_stage_value),
+                "cost_stage_gap": money(optimizer.cost_stage_gap),
                 "status": result.get('status'),
                 "steps": optimizer.T,
             }}), flush=True)
