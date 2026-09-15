@@ -166,8 +166,19 @@ components:
           enum: [none, discharge_before_import]
           description: |
             Sets a strategy for charging in situations where choices are cost neutral.
-            - none (default): no strategy set 
+            - none (default): no strategy set
             - discharge_before_import: discharge batteries before importing from grid
+        primary_goal:
+          type: string
+          enum: [minimize_cost, maximize_self_consumption]
+          description: |
+            Selects what the cost stage itself optimizes for. Unlike charging_strategy and
+            discharging_strategy, which only break ties between equally cheap schedules, this
+            changes what counts as optimal in the first place.
+            - minimize_cost (default): money, weighted by the price signals
+            - maximize_self_consumption: export is weighted as a cost like import instead of
+              revenue, so a battery with headroom is preferred over exporting even when both
+              are equally cheap in money terms
     GridConfig:
       type: object
       properties:

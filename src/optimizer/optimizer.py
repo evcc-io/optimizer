@@ -14,6 +14,7 @@ from .settings import OptimizerSettings
 class OptimizationStrategy:
     charging_strategy: str
     discharging_strategy: str
+    primary_goal: str = 'minimize_cost'
 
 
 # charging strategies that level grid peaks, mapped to the metered sides they level.
@@ -30,6 +31,15 @@ PEAK_STRATEGY_SIDES = {
 # away. Listed here next to the code that reads them so the API can reject the rest up front.
 CHARGING_STRATEGIES = ('none', 'charge_before_export', *PEAK_STRATEGY_SIDES)
 DISCHARGING_STRATEGIES = ('none', 'discharge_before_import')
+
+# primary_goal selects what the cost-stage objective (the real, non-negotiable optimization,
+# see _setup_target_function) actually optimizes for. 'minimize_cost' is the historical
+# behavior: money, weighted by the price signals. 'maximize_self_consumption' keeps the same
+# price-weighted terms but treats export like import - a cost to minimize rather than revenue
+# to collect - so a battery with headroom is preferred over exporting even when both are
+# equally cheap in money terms. Unlike charging_strategy's preferences (a same-cost tiebreak,
+# see _solve_preferences), this changes what counts as optimal in the first place.
+PRIMARY_GOALS = ('minimize_cost', 'maximize_self_consumption')
 
 # magnitude the largest objective coefficient is placed at before the model goes to the solver.
 # CBC judges improvements against absolute tolerances (~1e-7), and with prices given per Wh the
@@ -372,7 +382,12 @@ class Optimizer:
         ############################################################################
         # actual cost & benefit elements
 
-        # Grid import cost (negative because we want to minimize cost) [currency unit]
+        # Grid import cost (negative because we want to minimize cost) [currency unit].
+        # Grid export revenue, or under maximize_self_consumption a cost instead (see
+        # PRIMARY_GOALS): both stay weighted by the real price signals, so a genuine feed-in
+        # spike still outweighs holding the energy, and the constraint penalties below (also
+        # calibrated from these prices via penalty_base) stay correctly scaled either way.
+        export_sign = -1 if self.strategy.primary_goal == 'maximize_self_consumption' else 1
         for t in self.time_steps:
             # if a demand rate beyond p_max_imp is applied, both portions have to be considered
             # for energy cost. If only an import limit is given, there should never be power
@@ -389,9 +404,7 @@ class Optimizer:
                 # standard case
                 objective -= self.variables['n'][t] * self.time_series.p_N[t]
 
-        # Grid export revenue [currency unit]
-        for t in self.time_steps:
-            objective += self.variables['e'][t] * self.time_series.p_E[t]
+            objective += export_sign * self.variables['e'][t] * self.time_series.p_E[t]
 
         # Final state of charge value [currency unit]
         for i, bat in enumerate(self.batteries):

@@ -45,6 +45,12 @@ const (
 	OptimizerStrategyDischargingStrategyNone                  OptimizerStrategyDischargingStrategy = "none"
 )
 
+// Defines values for OptimizerStrategyPrimaryGoal.
+const (
+	MaximizeSelfConsumption OptimizerStrategyPrimaryGoal = "maximize_self_consumption"
+	MinimizeCost            OptimizerStrategyPrimaryGoal = "minimize_cost"
+)
+
 // BatteryConfig defines model for BatteryConfig.
 type BatteryConfig struct {
 	// CMax Maximum charge power in W
@@ -221,6 +227,15 @@ type OptimizerStrategy struct {
 	// - none (default): no strategy set
 	// - discharge_before_import: discharge batteries before importing from grid
 	DischargingStrategy OptimizerStrategyDischargingStrategy `json:"discharging_strategy,omitempty"`
+
+	// PrimaryGoal Selects what the cost stage itself optimizes for. Unlike charging_strategy and
+	// discharging_strategy, which only break ties between equally cheap schedules, this
+	// changes what counts as optimal in the first place.
+	// - minimize_cost (default): money, weighted by the price signals
+	// - maximize_self_consumption: export is weighted as a cost like import instead of
+	//   revenue, so a battery with headroom is preferred over exporting even when both
+	//   are equally cheap in money terms
+	PrimaryGoal OptimizerStrategyPrimaryGoal `json:"primary_goal,omitempty"`
 }
 
 // OptimizerStrategyChargingStrategy Sets a strategy for charging in situations where choices are cost neutral.
@@ -235,6 +250,15 @@ type OptimizerStrategyChargingStrategy string
 // - none (default): no strategy set
 // - discharge_before_import: discharge batteries before importing from grid
 type OptimizerStrategyDischargingStrategy string
+
+// OptimizerStrategyPrimaryGoal Selects what the cost stage itself optimizes for. Unlike charging_strategy and
+// discharging_strategy, which only break ties between equally cheap schedules, this
+// changes what counts as optimal in the first place.
+//   - minimize_cost (default): money, weighted by the price signals
+//   - maximize_self_consumption: export is weighted as a cost like import instead of
+//     revenue, so a battery with headroom is preferred over exporting even when both
+//     are equally cheap in money terms
+type OptimizerStrategyPrimaryGoal string
 
 // TimeSeries defines model for TimeSeries.
 type TimeSeries struct {
