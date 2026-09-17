@@ -144,7 +144,7 @@ class BatteryConfig:
     p_demand: Optional[List[float]] = None  # Minimum charge demand (Wh)
     s_goal: Optional[List[float]] = None  # Goal state of charge (Wh)
     c_priority: int = 0
-    c_initial: float = 0.  # Charge power at the start of the horizon (W)
+    c_active: bool = False  # Whether the device is charging at the start of the horizon
 
 
 @dataclass
@@ -810,7 +810,7 @@ class Optimizer:
         eligible = [i for i, active in self.variables['z_c'].items() if active is not None]
 
         def charging_now(i: int) -> int:
-            return int(self.batteries[i].c_initial > 0)
+            return int(self.batteries[i].c_active)
 
         def count_starts() -> list[int]:
             counts = []

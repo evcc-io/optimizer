@@ -35,7 +35,7 @@ def test_api_returns_continuous_equal_price_sessions(second_c_min: float | None)
 def test_api_keeps_a_running_session_charging():
     model = build()
     model.time_series.p_N = [0.0003] * 6
-    model.batteries[0].c_initial = 1000
+    model.batteries[0].c_active = True
     request = {
         'batteries': [{key: value for key, value in asdict(model.batteries[0]).items() if value is not None}],
         'time_series': asdict(model.time_series),

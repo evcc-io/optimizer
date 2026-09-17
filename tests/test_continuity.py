@@ -59,7 +59,7 @@ def test_equal_prices_prefer_one_session(monkeypatch: pytest.MonkeyPatch, probe_
 def test_running_session_is_not_interrupted(monkeypatch: pytest.MonkeyPatch, schedule: tuple[float, ...]):
     model = build()
     model.time_series.p_N = [0.0003] * 6
-    model.batteries[0].c_initial = 1000
+    model.batteries[0].c_active = True
     seed_fragmented(model, monkeypatch, schedule)
 
     result = model.solve()
@@ -72,7 +72,7 @@ def test_running_session_is_not_interrupted(monkeypatch: pytest.MonkeyPatch, sch
 
 def test_running_session_still_yields_to_price(monkeypatch: pytest.MonkeyPatch):
     model = build()
-    model.batteries[0].c_initial = 1000
+    model.batteries[0].c_active = True
     seed_fragmented(model, monkeypatch)
 
     result = model.solve()
@@ -170,7 +170,7 @@ def test_uninterrupted_or_unrestricted_batteries_skip_the_solver(monkeypatch: py
 def test_running_session_without_gap_skips_the_solver(monkeypatch: pytest.MonkeyPatch):
     model = build()
     model.time_series.p_N = [0.0003] * 6
-    model.batteries[0].c_initial = 1000
+    model.batteries[0].c_active = True
     seed_fragmented(model, monkeypatch, (500, 500, 500, 0, 0, 0))
     with monkeypatch.context() as context:
         context.setattr(Optimizer, '_solve_continuity', lambda *args: None)

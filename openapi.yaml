@@ -241,14 +241,15 @@ components:
           minimum: 0
           description: Maximum charge power in W
           example: 11000
-        c_initial:
-          type: number
-          minimum: 0
-          default: 0
+        c_active:
+          type: boolean
+          default: false
           description: |
-            Charge power at the start of the time horizon in W. Greater than zero means the device is
-            charging right now, so keeping it on costs no charge start and interrupting it does.
-          example: 4140
+            Whether the device is charging at the start of the time horizon.
+              - True: the device enters the horizon switched on, so keeping it on costs no charge
+                start and interrupting it costs one.
+              - False: (default) the device is idle and any charging starts a new session.
+          example: true
         d_max:
           type: number
           minimum: 0
