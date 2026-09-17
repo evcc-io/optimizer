@@ -240,7 +240,15 @@ components:
           type: number
           minimum: 0
           description: Maximum charge power in W
-          example: 11000 
+          example: 11000
+        c_initial:
+          type: number
+          minimum: 0
+          default: 0
+          description: |
+            Charge power at the start of the time horizon in W. Greater than zero means the device is
+            charging right now, so keeping it on costs no charge start and interrupting it does.
+          example: 4140
         d_max:
           type: number
           minimum: 0

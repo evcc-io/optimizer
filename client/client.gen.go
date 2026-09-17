@@ -47,6 +47,10 @@ const (
 
 // BatteryConfig defines model for BatteryConfig.
 type BatteryConfig struct {
+	// CInitial Charge power at the start of the time horizon in W. Greater than zero means the device is
+	// charging right now, so keeping it on costs no charge start and interrupting it does.
+	CInitial float32 `json:"c_initial,omitempty"`
+
 	// CMax Maximum charge power in W
 	CMax float32 `json:"c_max"`
 

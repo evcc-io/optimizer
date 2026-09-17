@@ -32,6 +32,25 @@ def test_api_returns_continuous_equal_price_sessions(second_c_min: float | None)
         assert battery['state_of_charge'][-1] == pytest.approx(1500, abs=0.1)
 
 
+def test_api_keeps_a_running_session_charging():
+    model = build()
+    model.time_series.p_N = [0.0003] * 6
+    model.batteries[0].c_initial = 1000
+    request = {
+        'batteries': [{key: value for key, value in asdict(model.batteries[0]).items() if value is not None}],
+        'time_series': asdict(model.time_series),
+        'eta_c': 1,
+        'eta_d': 1,
+    }
+
+    response = app.test_client().post('/optimize/charge-schedule', json=request)
+
+    assert response.status_code == 200
+    charging = response.get_json()['batteries'][0]['charging_power']
+    assert charging[0] > 0
+    assert starts(charging) == 1
+
+
 @pytest.mark.parametrize('strategy', ['attenuate_demand_peaks', 'attenuate_feedin_peaks', 'attenuate_grid_peaks'])
 def test_each_grid_peak_is_preserved(monkeypatch: pytest.MonkeyPatch, strategy: str):
     model = build(strategy)

@@ -28,11 +28,11 @@ def starts(charging: list[float]) -> int:
     return int(np.count_nonzero(active & ~np.r_[False, active[:-1]]))
 
 
-def seed_fragmented(model: Optimizer, monkeypatch: pytest.MonkeyPatch) -> None:
+def seed_fragmented(model: Optimizer, monkeypatch: pytest.MonkeyPatch, schedule: tuple[float, ...] = (0, 500, 0, 500, 0, 500)) -> None:
     original = model._probe_then_split
 
     def seeded(tmpdir: str, deadline: float | None) -> None:
-        for t, energy in enumerate([0, 500, 0, 500, 0, 500]):
+        for t, energy in enumerate(schedule):
             model.problem += model.variables['c'][0][t] == energy, f'seed_{t}'
         original(tmpdir, deadline)
         for t in model.time_steps:
@@ -53,6 +53,33 @@ def test_equal_prices_prefer_one_session(monkeypatch: pytest.MonkeyPatch, probe_
     assert starts(result['batteries'][0]['charging_power']) == 1
     assert result['batteries'][0]['state_of_charge'][-1] == pytest.approx(1500, abs=0.1)
     assert pulp.value(model.cost_objective) == pytest.approx(-0.45, abs=1e-5)
+
+
+@pytest.mark.parametrize('schedule', [(0, 500, 0, 500, 0, 500), (0, 500, 500, 500, 0, 0)])
+def test_running_session_is_not_interrupted(monkeypatch: pytest.MonkeyPatch, schedule: tuple[float, ...]):
+    model = build()
+    model.time_series.p_N = [0.0003] * 6
+    model.batteries[0].c_initial = 1000
+    seed_fragmented(model, monkeypatch, schedule)
+
+    result = model.solve()
+
+    charging = result['batteries'][0]['charging_power']
+    assert charging[0] > 0
+    assert starts(charging) == 1
+    assert result['batteries'][0]['state_of_charge'][-1] == pytest.approx(1500, abs=0.1)
+
+
+def test_running_session_still_yields_to_price(monkeypatch: pytest.MonkeyPatch):
+    model = build()
+    model.batteries[0].c_initial = 1000
+    seed_fragmented(model, monkeypatch)
+
+    result = model.solve()
+
+    charging = result['batteries'][0]['charging_power']
+    assert charging[0] == pytest.approx(0, abs=0.01)
+    assert starts(charging) == 1
 
 
 def test_price_gaps_keep_interruptions(monkeypatch: pytest.MonkeyPatch):
@@ -134,6 +161,23 @@ def test_uninterrupted_or_unrestricted_batteries_skip_the_solver(monkeypatch: py
 
     def unexpected_solver(*args, **kwargs):
         pytest.fail('continuity should not invoke CBC')
+
+    monkeypatch.setattr(model, '_solver', unexpected_solver)
+    with TemporaryDirectory() as tmpdir:
+        model._solve_continuity(tmpdir, None)
+
+
+def test_running_session_without_gap_skips_the_solver(monkeypatch: pytest.MonkeyPatch):
+    model = build()
+    model.time_series.p_N = [0.0003] * 6
+    model.batteries[0].c_initial = 1000
+    seed_fragmented(model, monkeypatch, (500, 500, 500, 0, 0, 0))
+    with monkeypatch.context() as context:
+        context.setattr(Optimizer, '_solve_continuity', lambda *args: None)
+        model.solve()
+
+    def unexpected_solver(*args, **kwargs):
+        pytest.fail('continuity should not invoke CBC for an uninterrupted session')
 
     monkeypatch.setattr(model, '_solver', unexpected_solver)
     with TemporaryDirectory() as tmpdir:
