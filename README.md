@@ -46,6 +46,21 @@ The maximum is a single value out of the horizon, which leaves one gap: a load s
   <img alt="Grid exchange over 24 hours without a strategy and with attenuate_grid_peaks, showing the import peak dropping from 11.5 kW to 3.6 kW" src="docs/img/example-peak-light.svg">
 </picture>
 
+## How a request is solved
+
+One request is up to five solver runs under one wall clock, `OPTIMIZER_TIME_LIMIT` (10 s in production). Each stage keeps what the previous one found unless it can improve on it without spending money. The request log carries where the clock went (`stages`), which path was taken (`path`), and what the tie break (`preferences`) and the continuity pass (`continuity`) did.
+
+| Stage | Task | Runs when | Parameters |
+|---|---|---|---|
+| `build` | Build the MILP and scale its objective so the largest coefficient sits at `OBJECTIVE_TARGET`. | Always. | `OBJECTIVE_TARGET` 1e6 |
+| `probe` | Solve cost and preferences together. Proven optimal means the tie is decided in one solve: path `joint`, nothing else runs on the money. | Unless `OPTIMIZER_PROBE_SECONDS` is 0. | `OPTIMIZER_PROBE_SECONDS`, default `PROBE_SHARE` 0.2 of the limit |
+| `cost` | Money only, stopped on an absolute gap. Holds back a slice of the clock for the tie break instead of taking whatever is left. | The probe did not prove its answer: path `split`. | `OPTIMIZER_GAP_ABS` 0.01 currency, `PREFERENCE_TIME_SHARE` 0.25 of the limit reserved |
+| `tie_break`, LP | Pin the binaries the cost stage chose and move only the continuous variables, under a bound that keeps the cost found. Milliseconds, so it runs whatever the clock says. If CBC calls the bound infeasible the slack is widened tenfold per retry. | Path `split` and a strategy is configured. | `OPTIMIZER_PREFERENCE_BUDGET` 0, `COST_BOUND_SLACK` 1e-5 up to `COST_BOUND_SLACK_CEILING` 1e-2, `COST_BOUND_TOLERANCE` 1e-4, `LP_PREFERENCE_TIME_LIMIT` 1 s |
+| `tie_break`, MILP | Search the whole model under the same bound to beat the LP. Whichever is ahead is returned. | After the LP, clock permitting. | The reserved slice, capped at `MILP_PREFERENCE_TIME_LIMIT` 2.5 s; uncapped without a time limit |
+| `continuity` | Fewest charge starts for batteries with `c_min > 0`, bounded by the cost, the preference value and each levelled grid peak already reached. A preference, not a guarantee: prices, charge demands and grid shaping still win, and power may vary within a session. | A battery has more than one charging session, and the solve so far took less than the stage may spend. | `CONTINUITY_TIME_LIMIT` 1 s, `CONTINUITY_TOLERANCE` 1e-5 |
+
+A schedule the solver stopped on at the limit is reported as `Feasible` rather than `Optimal`. A solve that comes back off the integers is refused and reported as `Not Solved`.
+
 ## API
 
 `POST /optimize/charge-schedule` takes the whole problem as one JSON document and returns the schedule. `GET /optimize/health` is the liveness probe. Every field is documented in [`openapi.yaml`](openapi.yaml).
