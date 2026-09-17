@@ -192,6 +192,7 @@ class BatteryConfig:
     p_demand: Optional[List[float]] = None  # Minimum charge demand (Wh)
     s_goal: Optional[List[float]] = None  # Goal state of charge (Wh)
     c_priority: int = 0
+    c_active: bool = False  # Whether the device is charging at the start of the horizon
 
 
 @dataclass
@@ -942,6 +943,9 @@ class Optimizer:
     def _solve_continuity(self, tmpdir: str, deadline: float | None) -> None:
         """Prefer fewer charge starts without trading away economics or existing preferences.
 
+        A device reported as charging enters the horizon switched on, so keeping it on is free and
+        interrupting it costs a start.
+
         Leaves continuity_stage behind, the way the tie break leaves preference_stage: what the
         stage did, or why it did nothing, one string per solve for the request log.
         """
@@ -955,11 +959,12 @@ class Optimizer:
             counts = []
             for i in eligible:
                 active = np.array([pulp.value(v) for v in self.variables['c'][i]]) > CONTINUITY_TOLERANCE
-                counts.append(int(np.count_nonzero(active & ~np.r_[False, active[:-1]])))
+                counts.append(int(np.count_nonzero(active & ~np.r_[self.batteries[i].c_active, active[:-1]])))
             return counts
 
         before = count_starts()
-        if not any(count > 1 for count in before):
+        # a device that is charging already can reach zero starts, one that is idle needs one
+        if all(count <= 1 - self.batteries[i].c_active for i, count in zip(eligible, before)):
             return
         # the candidate is this model plus a start per step, under a bound on the cost it just
         # optimized, so it is the harder problem: it does not finish inside a second where the
@@ -995,7 +1000,7 @@ class Optimizer:
             active = self.variables['z_c'][i]
             for t in self.time_steps:
                 start = pulp.LpVariable(f'charge_start_{i}_{t}', lowBound=0, upBound=1)
-                candidate += start >= active[t] - (active[t - 1] if t else 0)
+                candidate += start >= active[t] - (active[t - 1] if t else int(self.batteries[i].c_active))
                 starts.append(start)
         candidate.setObjective(-pulp.lpSum(starts))
 
