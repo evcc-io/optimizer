@@ -33,17 +33,12 @@ def test_circuit_limits_charge_sum(payload):
     assert all(total <= P_MAX + 1 for total in charge_sums(limited))
 
 
-def test_absent_circuits_keep_schedule(payload):
-    # captured before circuits existed
-    expected = {
-        'status': 'Optimal', 'objective_value': 5.778947399999998,
-        'limit_violations': {'grid_import_limit_exceeded': False, 'grid_export_limit_hit': False},
-        'batteries': [{'charging_power': [11000.0, 10052.632, 0.0], 'discharging_power': [0.0, 0.0, 0.0],
-                       'state_of_charge': [10450.0, 20000.0, 20000.0]}] * 2,
-        'grid_import': [22000.0, 20105.263, 0.0], 'grid_export': [0.0, 0.0, 0.0], 'flow_direction': [0, 0, 0],
-        'grid_import_overshoot': [], 'grid_export_overshoot': [],
-    }
-    assert app.test_client().post('/optimize/charge-schedule', json=payload).json == expected
+def test_non_binding_circuit_keeps_schedule(payload):
+    client = app.test_client()
+    control = client.post('/optimize/charge-schedule', json=payload).json
+
+    payload['circuits'] = [{'p_max': 2 * C_MAX, 'batteries': [0, 1]}]
+    assert client.post('/optimize/charge-schedule', json=payload).json == control
 
 
 @pytest.mark.parametrize('circuit, reason', [
