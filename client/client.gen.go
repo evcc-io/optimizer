@@ -106,6 +106,15 @@ type BatteryResult struct {
 	StateOfCharge []float32 `json:"state_of_charge,omitempty"`
 }
 
+// CircuitConfig defines model for CircuitConfig.
+type CircuitConfig struct {
+	// Batteries Indices into batteries of the batteries on this circuit
+	Batteries []int `json:"batteries"`
+
+	// PMax Maximum summed charge power of the listed batteries in W
+	PMax float32 `json:"p_max"`
+}
+
 // Error defines model for Error.
 type Error struct {
 	// Details Field-specific validation errors. Keys are field paths (e.g., "batteries.0.s_max"), values are error messages.
@@ -141,6 +150,12 @@ type LimitViolationResult struct {
 type OptimizationInput struct {
 	// Batteries Configuration for all batteries in the system
 	Batteries []BatteryConfig `json:"batteries"`
+
+	// Circuits Circuits limiting the summed charge power of the batteries they list, for example
+	// vehicles sharing a sub-circuit below the grid limit. Discharging is not counted.
+	// Each entry is enforced independently: a nested circuit is expressed by a parent entry
+	// that lists all batteries of its children. Omitted: no limit.
+	Circuits []CircuitConfig `json:"circuits,omitempty"`
 
 	// EtaC Charging efficiency (0 to 1)
 	EtaC float32 `json:"eta_c,omitempty"`

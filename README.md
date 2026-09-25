@@ -79,6 +79,8 @@ The response carries `status`, the `objective_value`, `grid_import` / `grid_expo
 
 Time steps do not have to be equally long: `dt` is given per step, so a schedule can be fine grained for the next hour and coarse for tomorrow.
 
+Batteries sharing a sub-circuit below the grid limit, for example two vehicles on one feed, are listed in `circuits`: `[{ "p_max": 11000, "batteries": [0, 1] }]` keeps their summed charge power at or below 11 kW in every step. Discharging is not counted. Each entry is enforced on its own, so a nested circuit is expressed as a parent entry listing all batteries of its children. Without `circuits` the schedule is unchanged.
+
 A small Go client for sending requests to a running service lives in [`cmd/client.go`](cmd/client.go); it prints the request, the resulting schedule and the objective value:
 
 ```sh

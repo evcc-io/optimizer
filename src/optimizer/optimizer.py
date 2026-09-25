@@ -144,6 +144,12 @@ class BatteryConfig:
 
 
 @dataclass
+class CircuitConfig:
+    p_max: float  # Maximum charge power sum of the listed batteries [W]
+    batteries: List[int]  # Indices into the batteries list
+
+
+@dataclass
 class TimeSeriesData:
     dt: List[int]  # time step length [s]
     gt: List[float]  # Required total energy [Wh]
@@ -159,7 +165,8 @@ class Optimizer:
     """
 
     def __init__(self, strategy: OptimizationStrategy, grid: GridConfig, batteries: List[BatteryConfig], time_series: TimeSeriesData,
-                 eta_c: float = 0.95, eta_d: float = 0.95, M: float = 1e6, optimizer_settings: OptimizerSettings | None = None):
+                 eta_c: float = 0.95, eta_d: float = 0.95, M: float = 1e6, optimizer_settings: OptimizerSettings | None = None,
+                 circuits: List[CircuitConfig] | None = None):
         """
         Optimizer Constructor
         """
@@ -170,6 +177,7 @@ class Optimizer:
         self.grid = grid
         self.batteries = batteries
         self.time_series = time_series
+        self.circuits = circuits or []
         self.eta_c = eta_c
         self.eta_d = eta_d
         self.M = M
@@ -254,6 +262,7 @@ class Optimizer:
         self._setup_target_function()
         self._add_energy_balance_constraints()
         self._add_battery_constraints()
+        self._add_circuit_constraints()
 
     def _setup_variables(self):
         """
@@ -705,6 +714,15 @@ class Optimizer:
                 # Charge constraint
                 self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
                                  * (1 - self.variables['z_cd'][i][t]))
+
+    def _add_circuit_constraints(self):
+        """
+        Limit the charge power sum of the batteries sharing a circuit. Discharging is not counted.
+        """
+        for circuit in self.circuits:
+            for t in self.time_steps:
+                self.problem += (pulp.lpSum(self.variables['c'][i][t] for i in circuit.batteries)
+                                 <= circuit.p_max * self.time_series.dt[t] / 3600.)
 
     def _solver(self, tmpdir, **options):
         """CBC with the shared settings, writing its scratch files to tmpdir."""
