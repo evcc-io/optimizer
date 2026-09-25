@@ -272,6 +272,28 @@ components:
           default: 0
           description: Charging and discharging priority 0..2 compared to other batteries. 2 = highest priority.
 
+    CircuitConfig:
+      type: object
+      required:
+        - p_max
+        - batteries
+      properties:
+        p_max:
+          type: number
+          minimum: 0
+          exclusiveMinimum: true
+          description: Maximum summed charge power of the listed batteries in W
+          example: 11000
+        batteries:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+          minItems: 1
+          uniqueItems: true
+          description: Indices into batteries of the batteries on this circuit
+          example: [0, 1]
+
     TimeSeries:
       type: object
       required:
@@ -339,6 +361,18 @@ components:
           description: Configuration for all batteries in the system
         time_series:
           $ref: "#/components/schemas/TimeSeries"
+        circuits:
+          type: array
+          items:
+            $ref: "#/components/schemas/CircuitConfig"
+          description: |
+            Circuits limiting the summed charge power of the batteries they list, for example
+            vehicles sharing a sub-circuit below the grid limit. Discharging is not counted.
+            Each entry is enforced independently: a nested circuit is expressed by a parent entry
+            that lists all batteries of its children. Omitted: no limit.
+          example:
+            - p_max: 11000
+              batteries: [0, 1]
         eta_c:
           type: number
           minimum: 0

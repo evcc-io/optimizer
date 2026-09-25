@@ -10,7 +10,7 @@ from flask import Flask, jsonify, request
 from flask_restx import Api, Resource, fields
 from werkzeug.exceptions import BadRequest
 
-from .optimizer import CHARGING_STRATEGIES, DISCHARGING_STRATEGIES, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
+from .optimizer import CHARGING_STRATEGIES, DISCHARGING_STRATEGIES, BatteryConfig, CircuitConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
 from .settings import OptimizerSettings
 
 app = Flask(__name__)
@@ -132,6 +132,12 @@ battery_config_model = api.model('BatteryConfig', {
     'c_priority': fields.Integer(required=False, description='Charging and discharging priority compared to other batteries. 2 = highest priority.')
 })
 
+circuit_model = api.model('CircuitConfig', {
+    'p_max': fields.Float(required=True, exclusiveMin=0, description='Maximum charge power sum of the listed batteries (W)'),
+    'batteries': fields.List(fields.Integer(min=0), required=True, min_items=1, unique=True,
+                             description='Indices into batteries of the batteries on this circuit'),
+})
+
 time_series_model = api.model('TimeSeries', {
     'dt': fields.List(fields.Float, required=True, description='duration in seconds for each time step (s)'),
     'gt': fields.List(fields.Float, required=True, description='Required energy for home consumption at each time step (Wh)'),
@@ -145,6 +151,8 @@ optimization_input_model = api.model('OptimizationInput', {
     'grid': fields.Nested(grid_model, required=False, description='Grid import and export configuration'),
     'batteries': fields.List(fields.Nested(battery_config_model), required=True, description='Battery configurations'),
     'time_series': fields.Nested(time_series_model, required=True, description='Time series data'),
+    'circuits': fields.List(fields.Nested(circuit_model), required=False,
+                            description='Circuits limiting the charge power sum of their batteries. Discharging is not counted.'),
     'eta_c': fields.Float(required=False, default=0.95, description='Charging efficiency'),
     'eta_d': fields.Float(required=False, default=0.95, description='Discharging efficiency'),
 })
@@ -222,6 +230,10 @@ class OptimizeCharging(Resource):
                     c_priority=bat_data.get('c_priority', 0),
                 ))
 
+            circuits = [CircuitConfig(p_max=c['p_max'], batteries=c['batteries']) for c in data.get('circuits', [])]
+            if any(i >= len(batteries) for c in circuits for i in c.batteries):
+                api.abort(400, "Circuit battery index out of range")
+
             # Parse time series data
             time_series = TimeSeriesData(
                 dt=data['time_series']['dt'],
@@ -258,7 +270,8 @@ class OptimizeCharging(Resource):
                 time_series=time_series,
                 eta_c=data.get('eta_c', 0.95),
                 eta_d=data.get('eta_d', 0.95),
-                M=1e6
+                M=1e6,
+                circuits=circuits,
             )
 
             started = time.perf_counter()
