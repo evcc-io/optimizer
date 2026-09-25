@@ -1,6 +1,7 @@
 import shutil
 import time
 from dataclasses import dataclass
+from math import isfinite
 from tempfile import TemporaryDirectory
 from typing import Dict, List, Optional
 
@@ -67,6 +68,10 @@ def objective_scale(objective) -> float:
     return OBJECTIVE_TARGET / max(coefficients)
 
 
+def _complete_solution(problem: pulp.LpProblem) -> bool:
+    return all(var.name == '__dummy' or (var.varValue is not None and isfinite(var.varValue)) for var in problem.variables())
+
+
 # name of the constraint the second stage adds to keep the money the first stage found
 COST_BOUND = 'cost_bound'
 
@@ -107,6 +112,9 @@ PROBE_SHARE = 0.2
 # request that is hard on money still gets the money right and only loses part of the tie break
 PREFERENCE_TIME_SHARE = 0.25
 
+CONTINUITY_TIME_LIMIT = 1.0
+CONTINUITY_TOLERANCE = 1e-5
+
 # a cbc on PATH is preferred over the one pulp bundles, which is 2.10.3 built Dec 2019 and gets a
 # MIP start wrong on this model, see _solve_preferences. None falls back to the bundled binary, so
 # a checkout without cbc installed still runs. The Dockerfile installs one.
@@ -141,6 +149,7 @@ class BatteryConfig:
     p_demand: Optional[List[float]] = None  # Minimum charge demand (Wh)
     s_goal: Optional[List[float]] = None  # Goal state of charge (Wh)
     c_priority: int = 0
+    c_active: bool = False  # Whether the device is charging at the start of the horizon
 
 
 @dataclass
@@ -793,6 +802,85 @@ class Optimizer:
                 var.varValue = value
         self.problem.status = pulp.LpStatusOptimal
 
+    def _solve_continuity(self, tmpdir: str, deadline: float | None) -> None:
+        """Prefer fewer charge starts without trading away economics or existing preferences.
+
+        A device reported as charging enters the horizon switched on, so keeping it on is free and
+        interrupting it costs a start.
+        """
+        if (self.problem.sol_status not in (pulp.LpSolutionOptimal, pulp.LpSolutionIntegerFeasible)
+                or not _complete_solution(self.problem) or not self._is_integral()):
+            return
+
+        eligible = [i for i, active in self.variables['z_c'].items() if active is not None]
+
+        def charging_now(i: int) -> int:
+            return int(self.batteries[i].c_active)
+
+        def count_starts() -> list[int]:
+            counts = []
+            for i in eligible:
+                active = np.array([pulp.value(v) for v in self.variables['c'][i]]) > CONTINUITY_TOLERANCE
+                counts.append(int(np.count_nonzero(active & ~np.r_[bool(charging_now(i)), active[:-1]])))
+            return counts
+
+        before = count_starts()
+        # a device that is charging already can reach zero starts, one that is idle needs one
+        if all(count <= 1 - charging_now(i) for i, count in zip(eligible, before)):
+            return
+        remaining = CONTINUITY_TIME_LIMIT if deadline is None else min(CONTINUITY_TIME_LIMIT, deadline - time.monotonic())
+        if remaining <= 0:
+            return
+
+        solution = {var: var.varValue for var in self.problem.variables()}
+        cost = pulp.value(self.cost_objective)
+        preference = pulp.LpAffineExpression(self.preference_objective)
+        # Normalize tiny preference coefficients so CBC's row tolerance cannot erase their bound.
+        scale = 1 / max((abs(value) for value in preference.values() if value), default=1)
+        preference *= scale
+        preferred = pulp.value(preference)
+
+        # A shallow copy shares solution variables but leaves the reusable model's constraints intact.
+        candidate = self.problem.copy()
+        candidate += self.cost_objective >= cost - CONTINUITY_TOLERANCE
+        candidate += preference >= preferred - CONTINUITY_TOLERANCE
+        peak_values = {side: pulp.value(self.variables[f'p_{side}_peak']) for side in self.peak_sides}
+        for side in self.peak_sides:
+            candidate += self.variables[f'p_{side}_peak'] <= peak_values[side] + CONTINUITY_TOLERANCE
+        starts = []
+        for i in eligible:
+            active = self.variables['z_c'][i]
+            for t in self.time_steps:
+                start = pulp.LpVariable(f'charge_start_{i}_{t}', lowBound=0, upBound=1)
+                candidate += start >= active[t] - (active[t - 1] if t else charging_now(i))
+                starts.append(start)
+        candidate.setObjective(-pulp.lpSum(starts))
+
+        improved = False
+        try:
+            if deadline is not None:
+                remaining = min(remaining, deadline - time.monotonic())
+                if remaining <= 0:
+                    return
+            candidate.solve(self._solver(tmpdir, timeLimit=remaining))
+            if (candidate.sol_status not in (pulp.LpSolutionOptimal, pulp.LpSolutionIntegerFeasible)
+                    or not _complete_solution(candidate) or not self._is_integral()):
+                return
+            # CBC writes its solution with 8 significant digits, so a balance row over a 40 kWh
+            # SOC comes back off by up to 1e-3 and candidate.valid(1e-5) rejects every candidate
+            # (#146). CBC already held the model rows; only the bounds added here need checking.
+            improved = (pulp.value(self.cost_objective) >= cost - 2 * CONTINUITY_TOLERANCE
+                        and pulp.value(preference) >= preferred - 2 * CONTINUITY_TOLERANCE
+                        and all(pulp.value(self.variables[f'p_{side}_peak']) <= peak_values[side] + 2 * CONTINUITY_TOLERANCE
+                                for side in self.peak_sides)
+                        and sum(count_starts()) < sum(before))
+        except pulp.PulpSolverError:
+            return
+        finally:
+            if not improved:
+                for var, value in solution.items():
+                    var.varValue = value
+
     def _probe_then_split(self, tmpdir, deadline) -> None:
         """
         Solve the whole objective if it can be proved quickly, otherwise fall back to the split.
@@ -888,6 +976,7 @@ class Optimizer:
 
         with TemporaryDirectory() as tmpdir:
             self._probe_then_split(tmpdir, deadline)
+            self._solve_continuity(tmpdir, deadline)
 
         # back to the total worth of the solution, neither stage objective on its own
         self.problem.setObjective((self.cost_objective + self.preference_objective) * self.objective_scale)
