@@ -1,6 +1,5 @@
-import shutil
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from tempfile import TemporaryDirectory
 from typing import Dict, List, Optional
 
@@ -43,6 +42,14 @@ OBJECTIVE_TARGET = 1e6
 OBJECTIVE_SCALE = None
 
 
+def coefficients_of(expression) -> list[float]:
+    """Coefficients of an objective part, which is still the plain 0 it started from when no term
+    was added to it."""
+    if isinstance(expression, (int, float)):
+        return []
+    return list(expression.values())
+
+
 def objective_scale(objective) -> float:
     """
     Factor that puts the largest objective coefficient at OBJECTIVE_TARGET.
@@ -61,7 +68,7 @@ def objective_scale(objective) -> float:
     """
     if OBJECTIVE_SCALE is not None:
         return OBJECTIVE_SCALE
-    coefficients = [abs(c) for c in pulp.LpAffineExpression(objective).values() if c]
+    coefficients = [abs(c) for c in coefficients_of(objective) if c]
     if not coefficients:
         return 1.0
     return OBJECTIVE_TARGET / max(coefficients)
@@ -107,10 +114,13 @@ PROBE_SHARE = 0.2
 # request that is hard on money still gets the money right and only loses part of the tie break
 PREFERENCE_TIME_SHARE = 0.25
 
-# a cbc on PATH is preferred over the one pulp bundles, which is 2.10.3 built Dec 2019 and gets a
-# MIP start wrong on this model, see _solve_preferences. None falls back to the bundled binary, so
-# a checkout without cbc installed still runs. The Dockerfile installs one.
-SYSTEM_CBC = shutil.which('cbc')
+# reported status per pulp status when the solver returned no schedule. Every limit the solver
+# stopped on without a schedule is a Not Solved, the reason is not part of the API.
+STATUS_LABELS = {
+    'Infeasible': 'Infeasible',
+    'Unbounded': 'Unbounded',
+    'Undefined': 'Undefined',
+}
 
 # grid energy variable and limit exceedance variable per leveled side
 PEAK_SIDE_VARIABLES = {
@@ -190,6 +200,9 @@ class Optimizer:
         self.cost_stage_value = None
         # 'joint' when the probe proved the whole objective, 'split' when it fell back
         self.solve_path = None
+        # how the solve whose schedule sits in the variables ended. A stage that discards what it
+        # got restores the stats of the schedule it falls back to along with the values.
+        self.stats: pulp.LpSolveStats | None = None
         # dictionary of optimizer variables
         self.variables = {}
 
@@ -264,7 +277,7 @@ class Optimizer:
         self.variables['c'] = {}
         for i, bat in enumerate(self.batteries):
             self.variables['c'][i] = [
-                pulp.LpVariable(f"c_{i}_{t}", lowBound=0, upBound=bat.c_max * self.time_series.dt[t] / 3600.)
+                self.problem.add_variable(f"c_{i}_{t}", lowBound=0, upBound=bat.c_max * self.time_series.dt[t] / 3600.)
                 for t in self.time_steps
             ]
 
@@ -272,7 +285,7 @@ class Optimizer:
         self.variables['d'] = {}
         for i, bat in enumerate(self.batteries):
             self.variables['d'][i] = [
-                pulp.LpVariable(f"d_{i}_{t}", lowBound=0, upBound=bat.d_max * self.time_series.dt[t] / 3600.)
+                self.problem.add_variable(f"d_{i}_{t}", lowBound=0, upBound=bat.d_max * self.time_series.dt[t] / 3600.)
                 for t in self.time_steps
             ]
 
@@ -280,7 +293,7 @@ class Optimizer:
         self.variables['s'] = {}
         for i, bat in enumerate(self.batteries):
             self.variables['s'][i] = [
-                pulp.LpVariable(f"s_{i}_{t}", lowBound=0, upBound=bat.s_capacity)
+                self.problem.add_variable(f"s_{i}_{t}", lowBound=0, upBound=bat.s_capacity)
                 for t in self.time_steps
             ]
 
@@ -292,7 +305,7 @@ class Optimizer:
             if self.batteries[i].s_goal is not None:
                 for t in self.time_steps:
                     if self.batteries[i].s_goal[t] > 0:
-                        self.variables['s_goal_pen'][i][t] = pulp.LpVariable(f"s_goal_pen_{i}_{t}", lowBound=0)
+                        self.variables['s_goal_pen'][i][t] = self.problem.add_variable(f"s_goal_pen_{i}_{t}", lowBound=0)
 
         # penalty variable for not being able to charge with the required power
         self.variables['p_demand_pen'] = [[None for t in self.time_steps] for i in range(len(self.batteries))]
@@ -303,41 +316,46 @@ class Optimizer:
         for i, bat in enumerate(self.batteries):
             if bat.p_demand is not None:
                 for t in self.time_steps:
-                    self.variables['p_demand_pen'][i][t] = pulp.LpVariable(f"p_demand_pen_{i}_{t}", lowBound=0)
-                    self.variables['z_p_demand'][i][t] = pulp.LpVariable(f"z_p_demand_{i}_{t}", cat='Binary')
-                    self.variables['z_s_max_reached'][i][t] = pulp.LpVariable(f"z_s_max_reached_{i}_{t}", cat='Binary')
+                    self.variables['p_demand_pen'][i][t] = self.problem.add_variable(f"p_demand_pen_{i}_{t}", lowBound=0)
+                    self.variables['z_p_demand'][i][t] = self.problem.add_variable(f"z_p_demand_{i}_{t}", cat='Binary')
+                    # only the steps with a demand constrain it, and a variable no row uses comes back
+                    # from the solver without a value, which problem.valid() counts as a miss
+                    if bat.p_demand[t] > 0:
+                        self.variables['z_s_max_reached'][i][t] = self.problem.add_variable(f"z_s_max_reached_{i}_{t}", cat='Binary')
 
         # penalty variable for staying above max SOC and below min SOC
-        self.variables['s_max_pen'] = [[pulp.LpVariable(f"s_max_pen_{i}_{t}", lowBound=0) for t in self.time_steps] for i in range(len(self.batteries))]
-        self.variables['s_min_pen'] = [[pulp.LpVariable(f"s_min_pen_{i}_{t}", lowBound=0) for t in self.time_steps] for i in range(len(self.batteries))]
+        self.variables['s_max_pen'] = [[self.problem.add_variable(f"s_max_pen_{i}_{t}", lowBound=0)
+                                        for t in self.time_steps] for i in range(len(self.batteries))]
+        self.variables['s_min_pen'] = [[self.problem.add_variable(f"s_min_pen_{i}_{t}", lowBound=0)
+                                        for t in self.time_steps] for i in range(len(self.batteries))]
 
         # Grid import/export variables [Wh]
-        self.variables['n'] = [pulp.LpVariable(f"n_{t}", lowBound=0) for t in self.time_steps]
-        self.variables['e'] = [pulp.LpVariable(f"e_{t}", lowBound=0) for t in self.time_steps]
+        self.variables['n'] = [self.problem.add_variable(f"n_{t}", lowBound=0) for t in self.time_steps]
+        self.variables['e'] = [self.problem.add_variable(f"e_{t}", lowBound=0) for t in self.time_steps]
 
         # penalty variables for exceeding grid power limits (W)
         # for grid import
         if self.grid.p_max_imp is not None:
-            self.variables['e_imp_lim_exc'] = [pulp.LpVariable(f"p_imp_pen_{t}", lowBound=0) for t in self.time_steps]
+            self.variables['e_imp_lim_exc'] = [self.problem.add_variable(f"p_imp_pen_{t}", lowBound=0) for t in self.time_steps]
             # binary variable to allow limit exceeding only if the regular import actually hits the limit
             # this is required to avoid that limit exceeds are shifted to other time steps
-            self.variables['z_imp_lim'] = [pulp.LpVariable(f"z_imp_lim_{t}", cat='Binary') for t in self.time_steps]
+            self.variables['z_imp_lim'] = [self.problem.add_variable(f"z_imp_lim_{t}", cat='Binary') for t in self.time_steps]
 
         # for grid export
         if self.grid.p_max_exp is not None:
-            self.variables['e_exp_lim_exc'] = [pulp.LpVariable(f"e_exp_lim_exc_{t}", lowBound=0) for t in self.time_steps]
+            self.variables['e_exp_lim_exc'] = [self.problem.add_variable(f"e_exp_lim_exc_{t}", lowBound=0) for t in self.time_steps]
             # binary variable to allow limit exceeding only if the regular export actually hits the limit
-            self.variables['z_exp_lim'] = [pulp.LpVariable(f"z_exp_lim_{t}", cat='Binary') for t in self.time_steps]
+            self.variables['z_exp_lim'] = [self.problem.add_variable(f"z_exp_lim_{t}", cat='Binary') for t in self.time_steps]
 
         # for demand rate calculation, we need to track the actual maximum import power
         # within the time horizon (W)
         if self.is_grid_demand_rate_active:
-            self.variables['p_max_imp_exc'] = pulp.LpVariable("p_max_imp_exc", lowBound=0)
+            self.variables['p_max_imp_exc'] = self.problem.add_variable("p_max_imp_exc", lowBound=0)
 
         # highest grid power over the whole horizon (W) per side, used by the peak attenuation
         # strategies
         for side in self.peak_sides:
-            self.variables[f'p_{side}_peak'] = pulp.LpVariable(f"p_{side}_peak", lowBound=0)
+            self.variables[f'p_{side}_peak'] = self.problem.add_variable(f"p_{side}_peak", lowBound=0)
 
         # Binary variable: power flow direction to / from grid variables
         # these variables
@@ -345,14 +363,14 @@ class Optimizer:
         # 2. control grid charging to batteries and grid export from batteries acc. to configuration
         self.variables['y'] = []
         for t in self.time_steps:
-            self.variables['y'].append(pulp.LpVariable(f"y_{t}", cat='Binary'))
+            self.variables['y'].append(self.problem.add_variable(f"y_{t}", cat='Binary'))
 
         # Binary variable for charging activation
         self.variables['z_c'] = {}
         for i, bat in enumerate(self.batteries):
             if bat.c_min > 0:
                 self.variables['z_c'][i] = [
-                    pulp.LpVariable(f"z_c_{i}_{t}", cat='Binary')
+                    self.problem.add_variable(f"z_c_{i}_{t}", cat='Binary')
                     for t in self.time_steps
                 ]
             else:
@@ -362,7 +380,7 @@ class Optimizer:
         self.variables['z_cd'] = {}
         for i, bat in enumerate(self.batteries):
             self.variables['z_cd'][i] = [
-                pulp.LpVariable(f"z_cd_{i}_{t}", cat='Binary')
+                self.problem.add_variable(f"z_cd_{i}_{t}", cat='Binary')
                 for t in self.time_steps
             ]
 
@@ -708,12 +726,9 @@ class Optimizer:
 
     def _solver(self, tmpdir, **options):
         """CBC with the shared settings, writing its scratch files to tmpdir."""
-        # COIN_CMD is the same solver taking a path, PULP_CBC_CMD is it pinned to the bundled
-        # binary and refuses a path outright
-        if SYSTEM_CBC:
-            solver = pulp.COIN_CMD(path=SYSTEM_CBC, msg=0, threads=self.settings.num_threads, **options)
-        else:
-            solver = pulp.PULP_CBC_CMD(msg=0, threads=self.settings.num_threads, **options)
+        # pulp resolves the binary unless one is configured: the cbcbox wheel the cbc extra
+        # installs, else a cbc on PATH
+        solver = pulp.COIN_CMD(path=self.settings.cbc_path, msg=0, threads=self.settings.num_threads, **options)
         solver.tmpDir = tmpdir
         return solver
 
@@ -725,7 +740,7 @@ class Optimizer:
 
         # no preference terms means no strategy is configured, so there is nothing to decide and
         # the first stage solution is already the answer
-        if not any(pulp.LpAffineExpression(self.preference_objective).values()):
+        if not any(coefficients_of(self.preference_objective)):
             self.preference_stage = 'none'
             return
 
@@ -741,6 +756,7 @@ class Optimizer:
             remaining = min(remaining, self.settings.time_limit * PREFERENCE_TIME_SHARE)
 
         # what the first stage found, to fall back to and to bound the money by
+        first = self.stats
         solution = {var: var.varValue for var in self.problem.variables()}
         cost = pulp.value(self.cost_objective)
         undecided = pulp.value(self.preference_objective)
@@ -748,33 +764,31 @@ class Optimizer:
         # the preferences may spend preference_budget of real money and no more, plus the slack
         # the solver needs to consider its own first stage solution feasible. Stated in currency
         # rather than scaled: the row then carries the raw price coefficients instead of prices
-        # lifted by a million.
+        # lifted by a million. A row cannot change once it is in the model, so solve() rebuilds
+        # the model before it runs a second time.
         budget = self.settings.preference_budget + COST_BOUND_SLACK
-        if COST_BOUND not in self.problem.constraints:
-            self.problem += (self.cost_objective >= cost - budget, COST_BOUND)
-        else:
-            self.problem.constraints[COST_BOUND].constant = -(cost - budget)
+        self.problem += (self.cost_objective >= cost - budget, COST_BOUND)
 
         # scaled in its own right: the preference terms are orders below the cost terms the factor
         # in _setup_target_function was derived from, so reusing that one would hand the solver an
         # objective sitting at the bottom of its tolerance band
         self.problem.setObjective(self.preference_objective * objective_scale(self.preference_objective))
-        # no warm start, although the first stage solution is right there and feasible. The CBC
-        # binary pulp ships, 2.10.3 built Dec 2019, mishandles a MIP start on this model: it
-        # returns a strictly worse schedule and reports it as proven optimal, and it declares the
-        # model infeasible over a cost bound the start itself satisfies. Measured on one captured
-        # request, preference -0.806 warm against -0.610 cold, the cold value matching a single
-        # joint solve to the last digit. Upstream has fixed it, the same LP and the same start file
-        # come back identical to the cold run on CBC 2.10.13, so this can go once pulp ships a
-        # newer binary or the image installs its own. It buys nothing today, this stage is cheap.
-        self.problem.solve(self._solver(tmpdir, timeLimit=remaining))
+        # no warm start, although the first stage solution is right there and feasible. CBC 2.10.3,
+        # which pulp 3 bundled, mishandled a MIP start on this model: it returned a strictly worse
+        # schedule and reported it as proven optimal, and it declared the model infeasible over a
+        # cost bound the start itself satisfies. Measured on one captured request, preference
+        # -0.806 warm against -0.610 cold, the cold value matching a single joint solve to the last
+        # digit. CBC 2.10.13, which the cbc extra installs now, returns the cold run for the same LP
+        # and start file, so the start can be tried again. It buys nothing today, this stage is
+        # cheap.
+        stats = self.problem.solve(self._solver(tmpdir, timeLimit=remaining))
 
         # keep what came back if it is an improvement that respects the money, proven optimal or
         # not: a tie break stopped by the clock still holds an incumbent, and the alternative is
         # the first stage schedule, which is no tie break at all. Both conditions are checked here
         # rather than read off the status, so a solver that reports the wrong one cannot spend
         # money.
-        self.preference_stage = pulp.LpStatus[self.problem.status]
+        self.preference_stage = stats.status_str
         # a stage that ran out of clock before it found an integer solution leaves the relaxation
         # in the variables, and pulp reads that back like any other result. It looks like a large
         # improvement precisely because it is one the model forbids: the binaries land between 0
@@ -782,16 +796,17 @@ class Optimizer:
         # other two conditions, for the same reason they are checked here rather than read off the
         # status: a solver that reports the wrong one must not be able to spend money, and it must
         # not be able to hand back a schedule the model does not allow either.
-        usable = (self.problem.sol_status in (pulp.LpSolutionOptimal, pulp.LpSolutionIntegerFeasible)
-                  and self._is_feasible())
+        usable = stats.has_solution and self._is_feasible()
         improved = (usable
                     and pulp.value(self.preference_objective) > undecided
                     and pulp.value(self.cost_objective) >= cost - budget - COST_BOUND_TOLERANCE)
-        if not improved:
+        if improved:
+            self.stats = stats
+        else:
             self.preference_stage += ', kept the first stage'
             for var, value in solution.items():
                 var.varValue = value
-        self.problem.status = pulp.LpStatusOptimal
+            self.stats = first
 
     def _probe_then_split(self, tmpdir, deadline) -> None:
         """
@@ -807,13 +822,11 @@ class Optimizer:
         if probe is None and self.settings.time_limit is not None:
             probe = self.settings.time_limit * PROBE_SHARE
         if probe != 0:
-            self.problem.solve(self._solver(tmpdir, timeLimit=probe))
+            self.stats = self.problem.solve(self._solver(tmpdir, timeLimit=probe))
 
-        # sol_status, not status: pulp reports LpStatusOptimal whenever CBC came back with any
-        # feasible solution, including one it stopped on at the time limit. Measured on a captured
-        # request, a 2 s run and a 30 s run both said Optimal, with objectives of -682466848 and
-        # 59714881. Only LpSolutionOptimal means proven, which is what the probe is asking.
-        if probe != 0 and self.problem.sol_status == pulp.LpSolutionOptimal and self._is_feasible():
+        # Optimal is proven: a run stopped by the clock or the gap reports that as its status and
+        # carries whatever it found in has_solution. Proven is what the probe is asking.
+        if probe != 0 and self.stats.status == pulp.LpSolveStatus.Optimal and self._is_feasible():
             self.solve_path = 'joint'
             self.cost_stage_value = pulp.value(self.cost_objective)
             self.preference_stage = 'not needed'
@@ -827,31 +840,29 @@ class Optimizer:
         # whatever the probe reached is a feasible schedule. Keep it: the split now has less clock
         # than it would have had alone, and on the hardest captured request that was the difference
         # between a schedule and no answer at all.
-        fallback = ({var: var.varValue for var in self.problem.variables()}
-                    if self.problem.sol_status in (pulp.LpSolutionOptimal,
-                                                   pulp.LpSolutionIntegerFeasible)
-                    and self._is_feasible() else None)
+        fallback = ((self.stats, {var: var.varValue for var in self.problem.variables()})
+                    if probe != 0 and self.stats.has_solution and self._is_feasible() else None)
 
         gap_abs = self.settings.gap_abs
         scale = self.objective_scale
         self.problem.setObjective(self.cost_objective * scale)
         remaining = None if deadline is None else max(deadline - time.monotonic(), 0.1)
-        self.problem.solve(self._solver(tmpdir, timeLimit=remaining,
-                                        gapAbs=None if gap_abs is None else gap_abs * scale))
+        self.stats = self.problem.solve(self._solver(tmpdir, timeLimit=remaining,
+                                                     gapAbs=None if gap_abs is None else gap_abs * scale))
 
-        if pulp.LpStatus[self.problem.status] == 'Optimal' and self._is_feasible():
-            # the cost stage is allowed to stop on its gap, so LpSolutionOptimal is not required of
-            # it, only that it produced something to break ties over
+        if self.stats.has_solution and self._is_feasible():
+            # the cost stage is allowed to stop on its gap, so proven is not required of it, only
+            # that it produced something to break ties over
             self.cost_stage_value = pulp.value(self.cost_objective)
             self._solve_preferences(tmpdir, deadline)
         elif fallback:
             self.solve_path = 'split, kept the probe'
-            for var, value in fallback.items():
+            self.stats, values = fallback
+            for var, value in values.items():
                 var.varValue = value
-            self.problem.status = pulp.LpStatusOptimal
-        elif pulp.LpStatus[self.problem.status] == 'Optimal':
+        elif self.stats.has_solution:
             # a status with no schedule behind it, see _is_feasible
-            self.problem.status = pulp.LpStatusNotSolved
+            self.stats = replace(self.stats, has_solution=False)
 
     def _is_feasible(self) -> bool:
         """Whether the current values hold every bound and row of the model.
@@ -860,7 +871,7 @@ class Optimizer:
         inside the root heuristics it reports Optimal, within gap tolerance, with the best objective
         it found, and writes a column vector that breaks the balance rows by whole charging steps,
         flagged ** in the file. pulp drops the flags and reads it like any other solution, so
-        neither status nor sol_status can tell it from a real one. Costs two milliseconds.
+        the status cannot tell it from a real one. Costs two milliseconds.
         """
         return self.problem.valid(FEASIBILITY_TOLERANCE)
 
@@ -880,7 +891,9 @@ class Optimizer:
         Returns a dictionary with the optimization results
         """
 
-        if self.problem is None:
+        # the cost bound the split adds cannot be updated in place, so a model that carries one
+        # from an earlier solve is built again
+        if self.problem is None or self.problem.get_constraint_by_name(COST_BOUND) is not None:
             self.create_model()
 
         # both stages share one wall clock, so a second solve cannot double the response time
@@ -894,15 +907,13 @@ class Optimizer:
 
         # Extract results.
         #
-        # pulp reports LpStatusOptimal whenever CBC came back with any feasible solution, including
-        # one it stopped on at the time limit, so status alone cannot tell a proved schedule from a
-        # truncated one. Measured on a captured request, a 2 s run and a 30 s run both said Optimal
-        # with objective values of -682466848 and 59714881. sol_status carries the distinction and
-        # is folded into the reported status here rather than exposed as a second field: callers
-        # already branch on this one, and 'Optimal' claiming more than it can back is the bug.
-        status = pulp.LpStatus[self.problem.status]
-        if status == 'Optimal' and self.problem.sol_status != pulp.LpSolutionOptimal:
-            status = 'Feasible'
+        # Optimal means proven. A schedule the solver stopped on, at the time limit or the gap, is
+        # returned like an optimal one but reported as Feasible: callers already branch on this
+        # field, and 'Optimal' claiming more than it can back is the bug. The wording is the API
+        # contract and predates pulp 4, which spells NotSolved without the space.
+        status = self.stats.status_str if self.stats else 'NotSolved'
+        if status != 'Optimal':
+            status = 'Feasible' if self.stats and self.stats.has_solution else STATUS_LABELS.get(status, 'Not Solved')
 
         # last line of defence. Every stage above decides for itself whether to keep what came
         # back, so nothing should reach this point off the integers or off the rows, but a schedule

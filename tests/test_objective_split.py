@@ -42,7 +42,7 @@ def solve_cost_only(optimizer):
     """First stage on its own, solved to proven optimality."""
     optimizer.create_model()
     optimizer.problem.setObjective(optimizer.cost_objective * optimizer.objective_scale)
-    optimizer.problem.solve(pulp.PULP_CBC_CMD(msg=0))
+    optimizer.problem.solve(optimizer._solver('/tmp'))
     return optimizer
 
 
@@ -84,7 +84,9 @@ def test_preference_stage_decides_the_tie(case):
     # what the second stage is for: the first stage is indifferent between the schedules it leaves
     # equally priced, so its preference value is whatever the search happened to stop on. Deciding
     # the tie afterwards has to be at least as good, and on these cases it is strictly better.
-    undecided = pulp.value(solve_cost_only(build(case)).preference_objective)
+    # kept in a name: an expression outlives its problem only as long as the problem is referenced
+    cost_only = solve_cost_only(build(case))
+    undecided = pulp.value(cost_only.preference_objective)
 
     decided = build(case)
     decided.settings.probe_seconds = 0
@@ -92,6 +94,17 @@ def test_preference_stage_decides_the_tie(case):
 
     assert pulp.value(decided.preference_objective) > undecided, \
         f'preferences after the tie break {pulp.value(decided.preference_objective)}, before {undecided}'
+
+
+def test_a_split_solve_runs_again_on_a_fresh_model():
+    # the cost bound the split adds cannot change once it is in the model, so solve() builds the
+    # model again rather than solving against the bound of the previous run
+    optimizer = build(CASES[0])
+    optimizer.settings.probe_seconds = 0
+    first = optimizer.solve()
+    again = optimizer.solve()
+    assert again['status'] == first['status'] == 'Optimal'
+    assert numpy.isclose(again['objective_value'], first['objective_value'])
 
 
 @pytest.mark.parametrize('case', CASES)
