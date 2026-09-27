@@ -114,6 +114,11 @@ PROBE_SHARE = 0.2
 # request that is hard on money still gets the money right and only loses part of the tie break
 PREFERENCE_TIME_SHARE = 0.25
 
+# CBC closes a solve at its gap tolerance as "Optimal (within gap tolerance)", which pulp 4 reports
+# as GapLimit. Its default gap is numerical noise and the cost stage asks for one deliberately, so
+# both count as proven, the way pulp 3 read them.
+PROVEN = (pulp.LpSolveStatus.Optimal, pulp.LpSolveStatus.GapLimit)
+
 # reported status per pulp status when the solver returned no schedule. Every limit the solver
 # stopped on without a schedule is a Not Solved, the reason is not part of the API.
 STATUS_LABELS = {
@@ -824,9 +829,9 @@ class Optimizer:
         if probe != 0:
             self.stats = self.problem.solve(self._solver(tmpdir, timeLimit=probe))
 
-        # Optimal is proven: a run stopped by the clock or the gap reports that as its status and
-        # carries whatever it found in has_solution. Proven is what the probe is asking.
-        if probe != 0 and self.stats.status == pulp.LpSolveStatus.Optimal and self._is_feasible():
+        # a run stopped by the clock reports TimeLimit and carries whatever it found in has_solution.
+        # Proven is what the probe is asking.
+        if probe != 0 and self.stats.status in PROVEN and self._is_feasible():
             self.solve_path = 'joint'
             self.cost_stage_value = pulp.value(self.cost_objective)
             self.preference_stage = 'not needed'
@@ -907,13 +912,14 @@ class Optimizer:
 
         # Extract results.
         #
-        # Optimal means proven. A schedule the solver stopped on, at the time limit or the gap, is
-        # returned like an optimal one but reported as Feasible: callers already branch on this
-        # field, and 'Optimal' claiming more than it can back is the bug. The wording is the API
-        # contract and predates pulp 4, which spells NotSolved without the space.
-        status = self.stats.status_str if self.stats else 'NotSolved'
-        if status != 'Optimal':
-            status = 'Feasible' if self.stats and self.stats.has_solution else STATUS_LABELS.get(status, 'Not Solved')
+        # Optimal means proven. A schedule the solver stopped on at the time limit is returned like
+        # an optimal one but reported as Feasible: callers already branch on this field, and
+        # 'Optimal' claiming more than it can back is the bug. The wording is the API contract and
+        # predates pulp 4, which spells NotSolved without the space.
+        if self.stats and self.stats.has_solution:
+            status = 'Optimal' if self.stats.status in PROVEN else 'Feasible'
+        else:
+            status = STATUS_LABELS.get(self.stats.status_str if self.stats else '', 'Not Solved')
 
         # last line of defence. Every stage above decides for itself whether to keep what came
         # back, so nothing should reach this point off the integers or off the rows, but a schedule
