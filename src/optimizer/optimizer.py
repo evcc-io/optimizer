@@ -826,8 +826,17 @@ class Optimizer:
         probe = self.settings.probe_seconds
         if probe is None and self.settings.time_limit is not None:
             probe = self.settings.time_limit * PROBE_SHARE
+        probe_failed = False
         if probe != 0:
-            self.stats = self.problem.solve(self._solver(tmpdir, timeLimit=probe))
+            try:
+                self.stats = self.problem.solve(self._solver(tmpdir, timeLimit=probe))
+            except pulp.PulpSolverError as err:
+                # the probe is a shortcut, not the answer. A solver that fails on it (a non-zero
+                # exit once the clock stopped it has been reported) must not take the request down
+                # with it: the split still has the rest of the clock.
+                print(f"probe failed, leaving the answer to the split: {err}")
+                probe_failed = True
+                probe = 0
 
         # a run stopped by the clock reports TimeLimit and carries whatever it found in has_solution.
         # Proven is what the probe is asking.
@@ -841,7 +850,7 @@ class Optimizer:
         # walk, then the tie break over the schedules money left equal. The gap is in currency
         # units and carries the model's own scale factor, otherwise a cent would reach the solver
         # in whatever unit the scaling happened to land on.
-        self.solve_path = 'split'
+        self.solve_path = 'split, probe failed' if probe_failed else 'split'
         # whatever the probe reached is a feasible schedule. Keep it: the split now has less clock
         # than it would have had alone, and on the hardest captured request that was the difference
         # between a schedule and no answer at all.

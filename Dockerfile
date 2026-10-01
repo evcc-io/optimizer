@@ -26,8 +26,9 @@ RUN groupadd -r app && useradd -r -g app -s /bin/false app
 # Copy the environment, but not the source code
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 
-# CBC comes from the cbcbox wheel of the pulp cbc extra, the same 2.10.13 on both architectures
-RUN echo | "$(/app/.venv/bin/python -c 'import pulp; print(pulp.COIN_CMD().path)')" | grep -q 'Version: 2.10.13'
+# CBC comes from the cbcbox wheel of the pulp cbc extra, the same build on both architectures.
+# It reports itself as a devel build, so only check that the binary runs here.
+RUN echo | "$(/app/.venv/bin/python -c 'import pulp; print(pulp.COIN_CMD().path)')" | grep -q 'COIN-OR Branch and Cut'
 
 # Run the application
 ENV PYTHONUNBUFFERED=1

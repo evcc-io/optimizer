@@ -38,6 +38,28 @@ def build(case):
         eta_c=request.get('eta_c', 0.95), eta_d=request.get('eta_d', 0.95), M=1e6)
 
 
+def test_a_failed_probe_leaves_the_answer_to_the_split(monkeypatch):
+    optimizer = build(CASES[0])
+    optimizer.settings.time_limit = 10
+    optimizer.create_model()
+
+    solve = optimizer.problem.solve
+    calls = []
+
+    def failing_probe(solver, **kwargs):
+        calls.append(solver.timeLimit)
+        if len(calls) == 1:
+            raise pulp.PulpSolverError('Pulp: Error while trying to execute')
+        return solve(solver, **kwargs)
+
+    monkeypatch.setattr(optimizer.problem, 'solve', failing_probe)
+    optimizer.solve()
+
+    assert len(calls) > 1, 'the split did not run'
+    assert optimizer.stats.has_solution
+    assert optimizer.solve_path == 'split, probe failed', optimizer.solve_path
+
+
 def solve_cost_only(optimizer):
     """First stage on its own, solved to proven optimality."""
     optimizer.create_model()
