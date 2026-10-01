@@ -731,8 +731,9 @@ class Optimizer:
 
     def _solver(self, tmpdir, **options):
         """CBC with the shared settings, writing its scratch files to tmpdir."""
-        # pulp resolves the binary unless one is configured: the cbcbox wheel the cbc extra
-        # installs, else a cbc on PATH
+        # pulp resolves the binary unless one is configured: a cbc on PATH, the 2.10 release build
+        # the image installs. The cbcbox wheel of the pulp cbc extra is deliberately not used, its
+        # devel build solves the captured requests 1.5 to 3 times slower
         solver = pulp.COIN_CMD(path=self.settings.cbc_path, msg=0, threads=self.settings.num_threads, **options)
         solver.tmpDir = tmpdir
         return solver
@@ -783,7 +784,7 @@ class Optimizer:
         # schedule and reported it as proven optimal, and it declared the model infeasible over a
         # cost bound the start itself satisfies. Measured on one captured request, preference
         # -0.806 warm against -0.610 cold, the cold value matching a single joint solve to the last
-        # digit. CBC 2.10.13, which the cbc extra installs now, returns the cold run for the same LP
+        # digit. CBC 2.10.10, which the image installs now, returns the cold run for the same LP
         # and start file, so the start can be tried again. It buys nothing today, this stage is
         # cheap.
         stats = self.problem.solve(self._solver(tmpdir, timeLimit=remaining))

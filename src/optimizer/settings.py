@@ -7,8 +7,7 @@ class OptimizerSettings(BaseSettings):
 
     num_threads: int | None = Field(default=None, description="Number of threads to use for optimization")
     cbc_path: str | None = Field(default=None,
-                                 description="CBC executable. Unset uses the one pulp resolves, the cbcbox wheel of "
-                                             "the pulp cbc extra or a cbc on PATH")
+                                 description="CBC executable. Unset uses the one pulp resolves, a cbc on PATH")
     gap_abs: float | None = Field(default=0.01,
                                   description="Absolute MIP gap in currency units, applied to the cost stage. The solver "
                                               "stops once the remaining gap is worth less than this, one cent by default. "

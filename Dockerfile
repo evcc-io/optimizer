@@ -18,6 +18,10 @@ ADD . /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-editable --no-group dev
 
+ADD --checksum=sha256:f551e7b843e25becee466a447118f6f44f219c4e46cfb4670829ecd3cf47e7d8 \
+    https://github.com/coin-or/Cbc/releases/download/releases%2F2.10.10/Cbc-releases.2.10.10-x86_64-ubuntu22-gcc1130-static.tar.gz \
+    /tmp/cbc.tar.gz
+
 FROM python:3.13-slim
 
 # Create non-root user
@@ -26,9 +30,20 @@ RUN groupadd -r app && useradd -r -g app -s /bin/false app
 # Copy the environment, but not the source code
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 
-# CBC comes from the cbcbox wheel of the pulp cbc extra, the same build on both architectures.
-# It reports itself as a devel build, so only check that the binary runs here.
-RUN echo | "$(/app/.venv/bin/python -c 'import pulp; print(pulp.COIN_CMD().path)')" | grep -q 'COIN-OR Branch and Cut'
+ARG TARGETARCH
+
+# pulp 4 no longer bundles a solver and resolves `cbc` from PATH. The cbcbox wheel of the
+# pulp[cbc] extra is not used: it ships a CBC devel build that solves the captured requests
+# 1.5 to 3 times slower than the 2.10 releases. amd64 gets the 2.10.10 release build that has
+# been serving production, arm64 the Debian 2.10 package.
+RUN --mount=from=builder,source=/tmp/cbc.tar.gz,target=/tmp/cbc.tar.gz set -eu; \
+    if [ "$TARGETARCH" = "amd64" ]; then \
+        tar -xzf /tmp/cbc.tar.gz -C /usr/local ./bin/cbc; \
+    else \
+        apt-get update -qq && apt-get install -y -qq --no-install-recommends coinor-cbc \
+            && rm -rf /var/lib/apt/lists/*; \
+    fi; \
+    echo | "$(/app/.venv/bin/python -c 'import pulp; print(pulp.COIN_CMD().path)')" | grep -q 'Version: 2.10'
 
 # Run the application
 ENV PYTHONUNBUFFERED=1
