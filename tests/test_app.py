@@ -1,4 +1,5 @@
 
+import dataclasses
 import json
 import pathlib
 
@@ -88,9 +89,8 @@ def test_subject_logging_is_configurable(capsys, monkeypatch):
 
 def test_unproved_solutions_report_feasible(monkeypatch):
     # A solve cut off by the clock still returns a full schedule, but it is not the proved optimum
-    # and must not claim to be. pulp sets LpStatusOptimal either way, so the distinction comes from
-    # sol_status: on one captured request a 2 s and a 30 s run both reported Optimal, with
-    # objective values of -682466848 and 59714881.
+    # and must not claim to be: on one captured request a 2 s and a 30 s run both came back with a
+    # schedule, with objective values of -682466848 and 59714881.
     #
     # The truncation is simulated rather than provoked with a small time limit, because CBC's -sec
     # is not a wall clock -- it is only tested between branch and bound nodes, so every stored case
@@ -99,9 +99,7 @@ def test_unproved_solutions_report_feasible(monkeypatch):
     original = pulp.LpProblem.solve
 
     def stopped_on_time(self, *args, **kwargs):
-        result = original(self, *args, **kwargs)
-        self.sol_status = pulp.LpSolutionIntegerFeasible
-        return result
+        return dataclasses.replace(original(self, *args, **kwargs), status=pulp.LpSolveStatus.TimeLimit)
 
     request = json.loads(pathlib.Path('test_cases/012-early-charging-not-perfect.json').read_text())["request"]
     client = app.test_client()

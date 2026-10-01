@@ -32,15 +32,18 @@ COPY --from=builder --chown=app:app /app/.venv /app/.venv
 
 ARG TARGETARCH
 
-# pulp bundles CBC 2.10.10 for arm64 but 2.10.3 from 2019 for amd64, and resolves the solver by a
-# fixed path with no override, so the bundled amd64 binary is linked to the fetched 2.10.10 build.
+# pulp 4 no longer bundles a solver and resolves `cbc` from PATH. The cbcbox wheel of the
+# pulp[cbc] extra is not used: it ships a CBC devel build that solves the captured requests
+# 1.5 to 3 times slower than the 2.10 releases. amd64 gets the 2.10.10 release build that has
+# been serving production, arm64 the Debian 2.10 package.
 RUN --mount=from=builder,source=/tmp/cbc.tar.gz,target=/tmp/cbc.tar.gz set -eu; \
     if [ "$TARGETARCH" = "amd64" ]; then \
         tar -xzf /tmp/cbc.tar.gz -C /usr/local ./bin/cbc; \
-        find /app/.venv -path '*/pulp/solverdir/cbc/*/cbc' -exec ln -sf /usr/local/bin/cbc {} \; ; \
+    else \
+        apt-get update -qq && apt-get install -y -qq --no-install-recommends coinor-cbc \
+            && rm -rf /var/lib/apt/lists/*; \
     fi; \
-    echo | "$(/app/.venv/bin/python -c 'from pulp.apis.coin_api import pulp_cbc_path; print(pulp_cbc_path)')" \
-        | grep -q 'Version: 2.10.10'
+    echo | "$(/app/.venv/bin/python -c 'import pulp; print(pulp.COIN_CMD().path)')" | grep -q 'Version: 2.10'
 
 # Run the application
 ENV PYTHONUNBUFFERED=1

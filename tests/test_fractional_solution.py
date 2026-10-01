@@ -38,9 +38,7 @@ def test_a_preference_stage_without_an_integer_solution_is_not_kept(monkeypatch)
         if len(calls) == 1:          # the cost stage, left alone
             return real_solve(*args, **kwargs)
         relax(optimizer)             # the preference stage, out of time and empty handed
-        optimizer.problem.status = pulp.LpStatusNotSolved
-        optimizer.problem.sol_status = pulp.LpSolutionNoSolutionFound
-        return optimizer.problem.status
+        return pulp.LpSolveStats(status=pulp.LpSolveStatus.TimeLimit, has_solution=False)
 
     monkeypatch.setattr(optimizer.problem, 'solve', solve)
     optimizer.solve()
@@ -63,8 +61,7 @@ def test_a_fractional_solution_is_reported_as_no_schedule(monkeypatch):
 
     def probe_then_split(tmpdir, deadline):
         relax(optimizer)
-        optimizer.problem.status = pulp.LpStatusOptimal
-        optimizer.problem.sol_status = pulp.LpSolutionIntegerFeasible
+        optimizer.stats = pulp.LpSolveStats(status=pulp.LpSolveStatus.TimeLimit, has_solution=True)
 
     monkeypatch.setattr(optimizer, '_probe_then_split', probe_then_split)
     result = optimizer.solve()
