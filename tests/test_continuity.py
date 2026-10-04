@@ -1,0 +1,365 @@
+import dataclasses
+import time
+from tempfile import TemporaryDirectory
+from typing import Literal, assert_never
+
+import numpy as np
+import pulp
+import pytest
+
+from optimizer.optimizer import CONTINUITY_SPLIT_TIME_LIMIT, CONTINUITY_TIME_LIMIT, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
+
+
+def build(strategy: str = 'none') -> Optimizer:
+    return Optimizer(
+        strategy=OptimizationStrategy(charging_strategy=strategy, discharging_strategy='none'),
+        grid=GridConfig(p_max_imp=None, p_max_exp=None, prc_p_exc_imp=None),
+        batteries=[BatteryConfig(charge_from_grid=True, discharge_to_grid=False,
+                                 s_capacity=5000, s_min=0, s_max=5000, s_initial=0,
+                                 c_min=1000, c_max=2000, d_max=0, p_a=0,
+                                 s_goal=[0, 0, 0, 0, 0, 1500])],
+        time_series=TimeSeriesData(dt=[900] * 6, gt=[0] * 6, ft=[0] * 6,
+                                   p_N=[0.001] + [0.0003] * 5, p_E=[0] * 6),
+        eta_c=1, eta_d=1,
+    )
+
+
+def starts(charging: list[float]) -> int:
+    active = np.array(charging) > 0.01
+    return int(np.count_nonzero(active & ~np.r_[False, active[:-1]]))
+
+
+def seed_fragmented(model: Optimizer, monkeypatch: pytest.MonkeyPatch, schedule: tuple[float, ...] = (0, 500, 0, 500, 0, 500)) -> None:
+    original = model._probe_then_split
+
+    def seeded(tmpdir: str, deadline: float | None) -> None:
+        # a row cannot leave the model again, bounds can: pin the charge to the schedule for the
+        # solve that produces the incumbent and free it before the continuity stage runs
+        charge = model.variables['c'][0]
+        bounds = [(var.lowBound, var.upBound) for var in charge]
+        for var, energy in zip(charge, schedule):
+            var.lowBound = var.upBound = energy
+        original(tmpdir, deadline)
+        for var, (low, up) in zip(charge, bounds):
+            var.lowBound, var.upBound = low, up
+
+    monkeypatch.setattr(model, '_probe_then_split', seeded)
+
+
+@pytest.mark.parametrize('probe_seconds', [None, 0])
+def test_equal_prices_prefer_one_session(monkeypatch: pytest.MonkeyPatch, probe_seconds: float | None):
+    model = build()
+    model.settings.probe_seconds = probe_seconds
+    seed_fragmented(model, monkeypatch)
+
+    result = model.solve()
+
+    assert result['status'] == 'Optimal'
+    assert starts(result['batteries'][0]['charging_power']) == 1
+    assert result['batteries'][0]['state_of_charge'][-1] == pytest.approx(1500, abs=0.1)
+    assert pulp.value(model.cost_objective) == pytest.approx(-0.45, abs=1e-5)
+    assert model.continuity_stage == 'improved 3 to 1'
+    assert model.stage_seconds['continuity'] >= 0
+
+
+@pytest.mark.parametrize('stage_seconds, expected_starts, expected_stage', [
+    # the candidate cannot beat the clock of the solve that produced the incumbent, so a solve
+    # that already took longer than the stage may spend gets no candidate at all
+    ({'probe': CONTINUITY_TIME_LIMIT + 1}, 3, 'skipped'),
+    # on the split path the probe spent its clock on the joint objective and failed, so it says
+    # nothing about the candidate; the cost stage it extends does. Counting the probe skipped the
+    # stage on every split request, the probe alone being PROBE_SHARE of the time limit (#170)
+    ({'probe': CONTINUITY_TIME_LIMIT + 1, 'cost': 0.1}, 1, 'improved 3 to 1'),
+])
+def test_continuity_is_gated_by_the_clock_of_the_stage_it_extends(
+        monkeypatch: pytest.MonkeyPatch, stage_seconds: dict[str, float], expected_starts: int, expected_stage: str):
+    model = build()
+    seed_fragmented(model, monkeypatch)
+    seeded = model._probe_then_split
+
+    def timed(tmpdir: str, deadline: float | None) -> None:
+        seeded(tmpdir, deadline)
+        model.stage_seconds.update(stage_seconds)
+
+    monkeypatch.setattr(model, '_probe_then_split', timed)
+
+    result = model.solve()
+
+    assert starts(result['batteries'][0]['charging_power']) == expected_starts
+    assert model.continuity_stage.startswith(expected_stage)
+    assert ('continuity' in model.stage_seconds) == expected_stage.startswith('improved')
+
+
+@pytest.mark.parametrize('path, cap', [('joint', CONTINUITY_TIME_LIMIT), ('split', CONTINUITY_SPLIT_TIME_LIMIT)])
+def test_split_gets_the_longer_continuity_clock(path: str, cap: float):
+    # the joint path is most of the traffic, the split has paid for a probe that proved nothing
+    # and has clock left; both stay inside the deadline
+    model = build()
+    model.solve_path = path
+    model.stage_seconds = {'probe': 0.5, 'cost': 0.5}
+
+    assert model._continuity_clock(None) == cap
+    assert model._continuity_clock(time.monotonic() + 0.5) == pytest.approx(0.5, abs=0.05)
+
+
+@pytest.mark.parametrize('schedule', [(0, 500, 0, 500, 0, 500), (0, 500, 500, 500, 0, 0)])
+def test_running_session_is_not_interrupted(monkeypatch: pytest.MonkeyPatch, schedule: tuple[float, ...]):
+    model = build()
+    model.time_series.p_N = [0.0003] * 6
+    model.batteries[0].c_active = True
+    seed_fragmented(model, monkeypatch, schedule)
+
+    result = model.solve()
+
+    charging = result['batteries'][0]['charging_power']
+    assert charging[0] > 0
+    assert starts(charging) == 1
+    assert result['batteries'][0]['state_of_charge'][-1] == pytest.approx(1500, abs=0.1)
+
+
+def test_running_session_still_yields_to_price(monkeypatch: pytest.MonkeyPatch):
+    model = build()
+    model.batteries[0].c_active = True
+    seed_fragmented(model, monkeypatch)
+
+    result = model.solve()
+
+    charging = result['batteries'][0]['charging_power']
+    assert charging[0] == pytest.approx(0, abs=0.01)
+    assert starts(charging) == 1
+
+
+def test_price_gaps_keep_interruptions(monkeypatch: pytest.MonkeyPatch):
+    model = build()
+    model.time_series.p_N = [0.001, 0.0003, 0.001, 0.0003, 0.001, 0.0003]
+    seed_fragmented(model, monkeypatch)
+
+    result = model.solve()
+
+    assert starts(result['batteries'][0]['charging_power']) == 3
+    assert pulp.value(model.cost_objective) == pytest.approx(-0.45, abs=1e-5)
+    assert model.continuity_stage == 'MILP Optimal unused'
+
+
+def test_grid_shaping_takes_priority(monkeypatch: pytest.MonkeyPatch):
+    model = build('attenuate_demand_peaks')
+    model.time_series.gt = [0, 0, 2000, 0, 2000, 0]
+    seed_fragmented(model, monkeypatch)
+
+    result = model.solve()
+
+    assert starts(result['batteries'][0]['charging_power']) == 3
+    assert max(result['grid_import']) == pytest.approx(2000, abs=0.01)
+
+
+def test_short_first_slot(monkeypatch: pytest.MonkeyPatch):
+    model = build()
+    model.time_series.dt[0] = 100
+    seed_fragmented(model, monkeypatch)
+
+    result = model.solve()
+
+    assert starts(result['batteries'][0]['charging_power']) == 1
+    assert result['batteries'][0]['charging_power'][0] == pytest.approx(0, abs=0.01)
+
+
+def test_repeated_solve_does_not_keep_polishing_constraints(monkeypatch: pytest.MonkeyPatch):
+    model = build()
+    seed_fragmented(model, monkeypatch)
+    model.solve()
+    constraints = {c.name for c in model.problem.constraints()}
+    variables = {v.name for v in model.problem.variables()}
+
+    result = model.solve()
+
+    assert starts(result['batteries'][0]['charging_power']) == 1
+    assert {c.name for c in model.problem.constraints()} == constraints
+    assert {v.name for v in model.problem.variables()} == variables
+
+
+@pytest.mark.parametrize('price', [0, -0.0003])
+def test_nonpositive_prices(monkeypatch: pytest.MonkeyPatch, price: float):
+    model = build()
+    model.time_series.p_N = [0.001] + [price] * 5
+    model.batteries[0].s_max = 1500
+    seed_fragmented(model, monkeypatch)
+
+    result = model.solve()
+
+    assert starts(result['batteries'][0]['charging_power']) == 1
+    assert pulp.value(model.cost_objective) == pytest.approx(-price * 1500, abs=2e-5)
+
+
+def test_forced_demand_is_preserved(monkeypatch: pytest.MonkeyPatch):
+    model = build()
+    model.batteries[0].p_demand = [0, 500, 0, 500, 0, 500]
+    seed_fragmented(model, monkeypatch)
+
+    result = model.solve()
+
+    assert result['batteries'][0]['charging_power'] == pytest.approx([0, 500, 0, 500, 0, 500], abs=0.01)
+
+
+@pytest.mark.parametrize('c_min', [0, 1000])
+def test_uninterrupted_or_unrestricted_batteries_skip_the_solver(monkeypatch: pytest.MonkeyPatch, c_min: float):
+    model = build()
+    model.batteries[0].c_min = c_min
+    model.batteries[0].s_goal = None
+    model.solve()
+
+    def unexpected_solver(*args, **kwargs):
+        pytest.fail('continuity should not invoke CBC')
+
+    monkeypatch.setattr(model, '_solver', unexpected_solver)
+    with TemporaryDirectory() as tmpdir:
+        model._solve_continuity(tmpdir, None)
+
+
+def test_running_session_without_gap_skips_the_solver(monkeypatch: pytest.MonkeyPatch):
+    model = build()
+    model.time_series.p_N = [0.0003] * 6
+    model.batteries[0].c_active = True
+    seed_fragmented(model, monkeypatch, (500, 500, 500, 0, 0, 0))
+    with monkeypatch.context() as context:
+        context.setattr(Optimizer, '_solve_continuity', lambda *args: None)
+        model.solve()
+
+    def unexpected_solver(*args, **kwargs):
+        pytest.fail('continuity should not invoke CBC for an uninterrupted session')
+
+    monkeypatch.setattr(model, '_solver', unexpected_solver)
+    with TemporaryDirectory() as tmpdir:
+        model._solve_continuity(tmpdir, None)
+
+
+def fragmented_model(monkeypatch: pytest.MonkeyPatch) -> Optimizer:
+    model = build()
+    seed_fragmented(model, monkeypatch)
+    with monkeypatch.context() as context:
+        context.setattr(Optimizer, '_solve_continuity', lambda *args: None)
+        model.solve()
+    return model
+
+
+def test_expired_deadline_keeps_incumbent(monkeypatch: pytest.MonkeyPatch):
+    model = fragmented_model(monkeypatch)
+    solution = {var: var.varValue for var in model.problem.variables()}
+
+    def unexpected_solver(*args, **kwargs):
+        pytest.fail('continuity should not invoke CBC after the deadline')
+
+    monkeypatch.setattr(model, '_solver', unexpected_solver)
+    with TemporaryDirectory() as tmpdir:
+        model._solve_continuity(tmpdir, time.monotonic() - 1)
+
+    assert {var: var.varValue for var in model.problem.variables()} == solution
+
+
+@pytest.mark.parametrize('outcome', ['infeasible', 'fractional', 'error', 'invalid'])
+def test_failed_polish_restores_incumbent(monkeypatch: pytest.MonkeyPatch, outcome: Literal['infeasible', 'fractional', 'error', 'invalid']):
+    model = fragmented_model(monkeypatch)
+    solution = {var: var.varValue for var in model.problem.variables()}
+    stats = model.stats
+
+    def failed_solve(candidate: pulp.LpProblem, *args, **kwargs):
+        for var in candidate.variables():
+            var.varValue = 0.3 if var.cat == pulp.LpInteger else 0
+        match outcome:
+            case 'error':
+                raise pulp.PulpSolverError('CBC unavailable')
+            case 'infeasible':
+                return pulp.LpSolveStats(status=pulp.LpSolveStatus.Infeasible, has_solution=False)
+            case 'fractional':
+                return pulp.LpSolveStats(status=pulp.LpSolveStatus.TimeLimit, has_solution=True)
+            case 'invalid':
+                return pulp.LpSolveStats(status=pulp.LpSolveStatus.Optimal, has_solution=True)
+            case _:
+                assert_never(outcome)
+
+    monkeypatch.setattr(pulp.LpProblem, 'solve', failed_solve)
+    with TemporaryDirectory() as tmpdir:
+        model._solve_continuity(tmpdir, None)
+
+    assert {var: var.varValue for var in model.problem.variables()} == solution
+    assert model.stats == stats
+
+
+def test_polish_does_not_upgrade_feasible_status(monkeypatch: pytest.MonkeyPatch):
+    model = fragmented_model(monkeypatch)
+    model.stats = dataclasses.replace(model.stats, status=pulp.LpSolveStatus.TimeLimit)
+
+    with TemporaryDirectory() as tmpdir:
+        model._solve_continuity(tmpdir, None)
+
+    assert starts([pulp.value(v) for v in model.variables['c'][0]]) == 1
+    assert model.stats.status == pulp.LpSolveStatus.TimeLimit
+
+
+# a value, once set, cannot be unset on a pulp 4 variable; a variable without one is what the
+# solver leaves behind for a column no row uses, see _complete_solution
+@pytest.mark.parametrize('value', [float('nan'), float('inf')])
+def test_incomplete_incumbent_skips_polishing(monkeypatch: pytest.MonkeyPatch, value: float):
+    model = fragmented_model(monkeypatch)
+    model.variables['c'][0][1].varValue = value
+
+    def unexpected_solver(*args, **kwargs):
+        pytest.fail('continuity should not invoke CBC without a complete incumbent')
+
+    monkeypatch.setattr(model, '_solver', unexpected_solver)
+    with TemporaryDirectory() as tmpdir:
+        model._solve_continuity(tmpdir, None)
+
+    assert str(model.variables['c'][0][1].varValue) == str(value)
+
+
+@pytest.mark.parametrize('bound', ['cost', 'preference', 'peak'])
+def test_invalid_solver_result_cannot_bypass_bounds(monkeypatch: pytest.MonkeyPatch, bound: str):
+    model = build('attenuate_demand_peaks')
+    if bound == 'cost':
+        model.time_series.p_N = [0.001, 0.0003, 0.001, 0.0003, 0.001, 0.0003]
+    if bound == 'peak':
+        model.time_series.gt = [0, 0, 2000, 0, 2000, 0]
+    seed_fragmented(model, monkeypatch)
+    with monkeypatch.context() as context:
+        context.setattr(Optimizer, '_solve_continuity', lambda *args: None)
+        model.solve()
+    model.preference_objective = model.variables['c'][0][5] if bound == 'preference' else 0
+    if bound != 'peak':
+        model.variables['p_imp_peak'].varValue = 10000
+    solution = {var: var.varValue for var in model.problem.variables()}
+
+    def forged_result(candidate: pulp.LpProblem, *args, **kwargs):
+        # the candidate is a copy, so the forged schedule is written to its own variables by name
+        mirror = candidate.variablesDict()
+        for var in candidate.variables():
+            var.varValue = 0
+        energy = [0, 500, 500, 500, 0, 0]
+        for t, charge in enumerate(energy):
+            mirror[model.variables['c'][0][t].name].varValue = charge
+            mirror[model.variables['s'][0][t].name].varValue = sum(energy[:t + 1])
+            mirror[model.variables['n'][t].name].varValue = charge + model.time_series.gt[t]
+            mirror[model.variables['z_c'][0][t].name].varValue = int(charge > 0)
+        mirror['charge_start_0_1'].varValue = 1
+        mirror[model.variables['p_imp_peak'].name].varValue = max(charge + gt for charge, gt in zip(energy, model.time_series.gt)) * 4
+        return pulp.LpSolveStats(status=pulp.LpSolveStatus.Optimal, has_solution=True)
+
+    monkeypatch.setattr(pulp.LpProblem, 'solve', forged_result)
+    with TemporaryDirectory() as tmpdir:
+        model._solve_continuity(tmpdir, None)
+
+    assert {var: var.varValue for var in model.problem.variables()} == solution
+
+
+def test_large_soc_survives_solution_precision(monkeypatch: pytest.MonkeyPatch):
+    # CBC writes eight significant digits, so a 40 kWh SOC comes back rounded to 1e-3 and every
+    # balance row is off by more than the gate tolerance. The candidate must still be kept (#146).
+    model = build()
+    model.batteries[0].s_capacity = model.batteries[0].s_max = 45000
+    model.batteries[0].s_initial = 40000.0123
+    model.batteries[0].s_goal = [0, 0, 0, 0, 0, 41500.0123]
+    seed_fragmented(model, monkeypatch)
+
+    result = model.solve()
+
+    assert starts(result['batteries'][0]['charging_power']) == 1
+    assert pulp.value(model.cost_objective) == pytest.approx(-0.45, abs=1e-5)

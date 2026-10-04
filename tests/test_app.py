@@ -8,6 +8,7 @@ import numpy
 import pulp
 import pytest
 
+import optimizer.app as app_module
 from optimizer.app import app, settings
 
 
@@ -134,6 +135,43 @@ def test_slow_requests_are_dumped(tmp_path, monkeypatch):
     assert len(lines) == 2, "every slow request appends one line"
     assert json.loads(lines[0])["request"] == request
     assert json.loads(lines[1])["elapsed"] > 0
+
+
+def test_requests_with_an_open_gap_are_dumped(tmp_path, monkeypatch):
+    request = json.loads(pathlib.Path('test_cases/026-attenuate-grid-peaks.json').read_text())["request"]
+    dump = tmp_path / "gap.jsonl"
+    client = app.test_client()
+    monkeypatch.setattr(settings, "dump_slow_requests", str(dump))
+    # the solver reads its own settings from the environment, so force the split there
+    monkeypatch.setenv("OPTIMIZER_PROBE_SECONDS", "0")
+
+    # a proven cost stage has no gap to replay for
+    client.post("/optimize/charge-schedule", json=request)
+    assert not dump.exists()
+
+    monkeypatch.setattr(app_module, "DUMP_GAP", -1.0)
+    client.post("/optimize/charge-schedule", json=request)
+    line = json.loads(dump.read_text())
+    assert line["gap"] == 0
+    assert line["request"] == request
+
+
+def test_every_request_logs_a_solve_line(capsys):
+    # the key names are the Log Analytics contract: the dashboard's KQL queries parse this line,
+    # so renaming one breaks production attribution silently
+    request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
+    client = app.test_client()
+    client.post("/optimize/charge-schedule", json=request, headers={"User-Agent": "evcc/0.311.1"})
+
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+             if line.startswith('{"solve"')]
+    assert len(lines) == 1, "every request logs exactly one solve line"
+    solve = lines[0]["solve"]
+    assert {"client", "elapsed", "stages", "path", "preferences", "continuity", "status", "steps"} <= set(solve)
+    assert solve["client"] == "evcc/0.311.1"
+    assert solve["elapsed"] > 0
+    assert solve["stages"] and set(solve["stages"]) <= {"build", "probe", "cost", "tie_break", "continuity"}
+    assert solve["steps"] == len(request["time_series"]["dt"])
 
 
 def test_abort_returns_json_message():

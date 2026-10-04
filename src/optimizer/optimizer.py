@@ -1,5 +1,9 @@
+import os
+import re
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from math import isfinite
 from tempfile import TemporaryDirectory
 from typing import Dict, List, Optional
 
@@ -47,6 +51,8 @@ def coefficients_of(expression) -> list[float]:
     was added to it."""
     if isinstance(expression, (int, float)):
         return []
+    if isinstance(expression, pulp.LpVariable):
+        return [1.0]
     return list(expression.values())
 
 
@@ -74,8 +80,14 @@ def objective_scale(objective) -> float:
     return OBJECTIVE_TARGET / max(coefficients)
 
 
+def _complete_solution(problem: pulp.LpProblem) -> bool:
+    return all(var.name == '__dummy' or (var.varValue is not None and isfinite(var.varValue)) for var in problem.variables())
+
+
 # name of the constraint the second stage adds to keep the money the first stage found
 COST_BOUND = 'cost_bound'
+# name of the slack variable on that row, see _solve_preferences
+COST_SLACK = 'cost_slack'
 
 # slack on that constraint, so a preference budget of zero stays feasible against the solver's
 # own rounding rather than turning into an infeasible model. Whatever is granted here is spent:
@@ -87,6 +99,15 @@ COST_BOUND = 'cost_bound'
 # stage solution satisfies, 3 of 19 at 1e-7 and 13 of 19 at 1e-9. That costs the tie break for
 # those requests but no money, see the fallback in _solve_preferences.
 COST_BOUND_SLACK = 1e-5
+
+# ceiling for the slack ladder in _solve_preferences. CBC declares the pinned tie break LP
+# infeasible on some production splits over a bound its own incumbent satisfies: the model's
+# big M rows put CBC's solve-time perturbation orders above any hundredth-of-a-cent slack, and
+# no algorithm switch helps (primal, dual, barrier and perturbation-off all agree). Measured on
+# two captured requests, feasibility returns at 3e-4 and 1e-3. Each retry multiplies the slack
+# by ten, so the ceiling is reached in three; it equals the default gap_abs, money the cost
+# stage may already have left on the table, and the alternative is no tie break at all.
+COST_BOUND_SLACK_CEILING = 1e-2
 
 # how far below the bound the check in _solve_preferences still accepts a solution. CBC treats
 # that row like any other, so it may miss it by its feasibility tolerance: measured at 1.2e-5 on
@@ -110,8 +131,22 @@ FEASIBILITY_TOLERANCE = 1e-2
 # p95 on a joint solve lands near 1.5 s, so a fifth of a 10 s limit clears the ordinary traffic.
 PROBE_SHARE = 0.2
 
-# share of OPTIMIZER_TIME_LIMIT the tie break stage may use. The cost stage keeps the rest, so a
-# request that is hard on money still gets the money right and only loses part of the tie break
+# share of OPTIMIZER_TIME_LIMIT reserved for the tie break stage, and the cap on what it spends.
+# The cost stage is held to the rest, so a request that is hard on money still gets the money right
+# and only loses part of the tie break.
+#
+# Reserved, not granted from what is left over. The cost stage is anytime branch and bound: on a
+# request it cannot close it consumes every second it is offered, which is exactly the shape of
+# request the tie break matters on. That left the tie break with 'no time' and the strategy silently
+# doing nothing, visible only as a 'Feasible' status. Measured over the stored cases at three time
+# limits, holding this back costs no money and no latency.
+#
+# Sized to seat the stage and no more: a reserve too small to seat it is worse than none, idle
+# time the cost stage could have used, and a reserve larger than the stage can spend is the same
+# idle time on the other side. The MILP tie break is capped at MILP_PREFERENCE_TIME_LIMIT, so 0.25
+# of the production 10 s limit is exactly that cap and the LP floors fit in the margin. This was
+# 0.4 before the cap existed, and production paid for it: the revision that introduced the reserve
+# alone moved p95 from 0.99 s to 1.41 s with the share of solves at the 10 s limit unchanged.
 PREFERENCE_TIME_SHARE = 0.25
 
 # CBC closes a solve at its gap tolerance as "Optimal (within gap tolerance)", which pulp 4 reports
@@ -126,6 +161,40 @@ STATUS_LABELS = {
     'Unbounded': 'Unbounded',
     'Undefined': 'Undefined',
 }
+
+# clock the tie break MILP may spend. Distinct from PREFERENCE_TIME_SHARE, which is what the
+# cost stage may not eat: the reserve seats the stage, this caps its spend. Measured over 16
+# captured production splits, the MILP finds everything it will find within 2.5 s - capping
+# there returned the identical preference value on 15 of 16, the 16th lost 1.7e-6, and every
+# deep tail request got the rest of its 4 s slice back as response time. The first incumbent
+# lands around 1.3 s and the 245 step model seats in 1.6 s, so 2.5 keeps margin over both.
+# Requests without a time limit stay uncapped, they asked to be solved out.
+MILP_PREFERENCE_TIME_LIMIT = 2.5
+
+# clock the cost stage may spend on a split. Absolute rather than what the reserve leaves of the
+# limit: the stage is anytime branch and bound and consumes whatever it is offered, so on the
+# production 10 s limit every split ran 5.4 s of it and 17 percent of them ended past the limit.
+# The split is 3 percent of the traffic and 38 percent of the CPU. Whether the seconds past 3 buy
+# money is what cost_stage_gap is logged to answer. Requests without a time limit stay uncapped.
+COST_TIME_LIMIT = 3.0
+
+# clock the pinned LP tie break may use. It is a linear program over a schedule that is already
+# feasible, worst measured 0.165 s over the stored cases, so this is a guard against a pathological
+# model rather than a budget. It runs even once the deadline is gone: without it a request that
+# spent its whole clock on the money gets no strategy at all.
+LP_PREFERENCE_TIME_LIMIT = 1.0
+
+# solve time above which the continuity stage is not tried at all, and the clock the candidate
+# gets on the joint path, see _continuity_clock. The joint path is 97 % of the traffic and a tenth
+# of a second there is replicas: one cap for every path at 2.5 s lifted its mean solve from 0.57
+# to 0.67 s within minutes, for a split improvement rate of 6.4 instead of 4.9 %.
+CONTINUITY_TIME_LIMIT = 1.0
+# clock the candidate gets on a split. That request has paid for a probe that proved nothing and
+# ends around 5 to 6 s of the 10 s limit, so 2.5 s fits inside what is left, and 1 s was too short:
+# every split that ran the stage at 1 s ended at the cap, where the stored #170 request needs 1.1 s.
+# Both bounded by the request deadline.
+CONTINUITY_SPLIT_TIME_LIMIT = 2.5
+CONTINUITY_TOLERANCE = 1e-5
 
 # grid energy variable and limit exceedance variable per leveled side
 PEAK_SIDE_VARIABLES = {
@@ -156,6 +225,7 @@ class BatteryConfig:
     p_demand: Optional[List[float]] = None  # Minimum charge demand (Wh)
     s_goal: Optional[List[float]] = None  # Goal state of charge (Wh)
     c_priority: int = 0
+    c_active: bool = False  # Whether the device is charging at the start of the horizon
 
 
 @dataclass
@@ -203,11 +273,17 @@ class Optimizer:
         # found before it ran. Everything below that value was given away deciding the tie.
         self.preference_stage = None
         self.cost_stage_value = None
+        # money the cost stage could not rule out above its schedule, in currency. Zero when it
+        # proved the value, None when it did not run.
+        self.cost_stage_gap = None
         # 'joint' when the probe proved the whole objective, 'split' when it fell back
         self.solve_path = None
         # how the solve whose schedule sits in the variables ended. A stage that discards what it
         # got restores the stats of the schedule it falls back to along with the values.
         self.stats: pulp.LpSolveStats | None = None
+        # wall clock per stage of the last solve(), keyed build/probe/cost/tie_break. What the
+        # response time was spent on, where the access log only carries the total.
+        self.stage_seconds = {}
         # dictionary of optimizer variables
         self.variables = {}
 
@@ -738,10 +814,71 @@ class Optimizer:
         solver.tmpDir = tmpdir
         return solver
 
+    @contextmanager
+    def _timed(self, stage):
+        """Add the wall clock of the enclosed block to stage_seconds.
+
+        Accumulating rather than assigning, because the tie break is two solves under one name.
+        """
+        started = time.monotonic()
+        try:
+            yield
+        finally:
+            self.stage_seconds[stage] = round(
+                self.stage_seconds.get(stage, 0.) + time.monotonic() - started, 4)
+
+    @staticmethod
+    def _cbc_gap(log_path, scale) -> float | None:
+        """Distance between CBC's schedule and its bound, from the log, in currency.
+
+        The solution file carries no bound, only the log does: a proven solve prints none and the
+        gap is zero, a stopped one prints the bound it reached.
+        """
+        # no log, no solver run behind the values, see the faked stages in the tests
+        if not os.path.exists(log_path):
+            return None
+        with open(log_path) as log:
+            text = log.read()
+        value = re.search(r'^Objective value:\s+(\S+)', text, re.MULTILINE)
+        if value is None:
+            return None
+        bound = re.search(r'^(?:Lower|Upper) bound:\s+(\S+)', text, re.MULTILINE)
+        if bound is None:
+            return 0.
+        return abs(float(bound.group(1)) - float(value.group(1))) / scale
+
+    def _pin_integers(self):
+        """Freeze every integer variable on the value it currently holds, undo data returned.
+
+        Lets the tie break ask a much cheaper question than the model it was handed: keep the
+        on/off pattern the cost stage settled on and move only the continuous variables. That is
+        a linear program once presolve has fixed them, and it is the only form of this stage that
+        reliably fits the clock. Bounds only: a variable's category is fixed at creation.
+        """
+        pinned = []
+        for var in self.problem.variables():
+            if var.cat == pulp.LpInteger and var.varValue is not None:
+                pinned.append((var, var.lowBound, var.upBound))
+                var.lowBound = var.upBound = round(var.varValue)
+        return pinned
+
+    @staticmethod
+    def _unpin_integers(pinned):
+        """Put back what _pin_integers changed, whatever the solve in between did."""
+        for var, low, up in pinned:
+            var.lowBound, var.upBound = low, up
+
     def _solve_preferences(self, tmpdir, deadline) -> None:
         """
         Second stage: maximize the preferences over the schedules the first stage left equally
         priced. The first stage solution stays as it is if this cannot improve on it.
+
+        Two solves, cheapest first. The LP pins the binaries the cost stage chose and moves only
+        the continuous variables, which costs milliseconds and therefore always runs. The MILP then
+        gets to beat that on the reserved slice. Whichever is ahead is what the caller gets, so a
+        request too big to decide the tie properly still gets the part of it that comes for free.
+        Measured on a 245 step levelling request: the cost stage alone leaves 1417 W import and
+        3609 W export, the LP reaches 1286 W and 1606 W, the MILP 200 W and 1606 W.
         """
 
         # no preference terms means no strategy is configured, so there is nothing to decide and
@@ -750,69 +887,232 @@ class Optimizer:
             self.preference_stage = 'none'
             return
 
-        remaining = None if deadline is None else deadline - time.monotonic()
-        if remaining is not None and remaining <= 0:
-            self.preference_stage = 'no time'
-            return
-        # deciding the tie to proven optimality is its own hard problem, as expensive as the cost
-        # optimum on the very requests this is meant to help, so it gets a slice of the clock
-        # rather than whatever is left of it. What it does not finish is still an improvement, see
-        # below, it just does not get to spend the whole budget on the last percent of it.
-        if remaining is not None:
-            remaining = min(remaining, self.settings.time_limit * PREFERENCE_TIME_SHARE)
-
-        # what the first stage found, to fall back to and to bound the money by
-        first = self.stats
-        solution = {var: var.varValue for var in self.problem.variables()}
+        # what the first stage found, to fall back to and to bound the money by. Every solve below
+        # that is kept replaces it, so this always holds the best schedule seen so far, with the
+        # stats of the solve that produced it.
+        best = {var: var.varValue for var in self.problem.variables()}
+        best_stats = self.stats
         cost = pulp.value(self.cost_objective)
         undecided = pulp.value(self.preference_objective)
 
         # the preferences may spend preference_budget of real money and no more, plus the slack
         # the solver needs to consider its own first stage solution feasible. Stated in currency
         # rather than scaled: the row then carries the raw price coefficients instead of prices
-        # lifted by a million. A row cannot change once it is in the model, so solve() rebuilds
-        # the model before it runs a second time.
-        budget = self.settings.preference_budget + COST_BOUND_SLACK
-        self.problem += (self.cost_objective >= cost - budget, COST_BOUND)
+        # lifted by a million. A row cannot change once it is in the model, so the slack sits on
+        # it as a bounded variable and widening it is a bound change; solve() rebuilds the model
+        # before it runs a second time.
+        slack = COST_BOUND_SLACK
+        budget = self.settings.preference_budget + slack
+        slack_var = self.problem.add_variable(COST_SLACK, lowBound=0, upBound=slack)
+        self.problem += (self.cost_objective + slack_var >= cost - self.settings.preference_budget, COST_BOUND)
 
         # scaled in its own right: the preference terms are orders below the cost terms the factor
         # in _setup_target_function was derived from, so reusing that one would hand the solver an
         # objective sitting at the bottom of its tolerance band
         self.problem.setObjective(self.preference_objective * objective_scale(self.preference_objective))
-        # no warm start, although the first stage solution is right there and feasible. CBC 2.10.3,
-        # which pulp 3 bundled, mishandled a MIP start on this model: it returned a strictly worse
-        # schedule and reported it as proven optimal, and it declared the model infeasible over a
-        # cost bound the start itself satisfies. Measured on one captured request, preference
-        # -0.806 warm against -0.610 cold, the cold value matching a single joint solve to the last
-        # digit. CBC 2.10.10, which the image installs now, returns the cold run for the same LP
-        # and start file, so the start can be tried again. It buys nothing today, this stage is
-        # cheap.
-        stats = self.problem.solve(self._solver(tmpdir, timeLimit=remaining))
 
-        # keep what came back if it is an improvement that respects the money, proven optimal or
-        # not: a tie break stopped by the clock still holds an incumbent, and the alternative is
-        # the first stage schedule, which is no tie break at all. Both conditions are checked here
-        # rather than read off the status, so a solver that reports the wrong one cannot spend
-        # money.
-        self.preference_stage = stats.status_str
-        # a stage that ran out of clock before it found an integer solution leaves the relaxation
-        # in the variables, and pulp reads that back like any other result. It looks like a large
-        # improvement precisely because it is one the model forbids: the binaries land between 0
-        # and 1, and every rule they gate stops holding, c_min among them. Checked here beside the
-        # other two conditions, for the same reason they are checked here rather than read off the
-        # status: a solver that reports the wrong one must not be able to spend money, and it must
-        # not be able to hand back a schedule the model does not allow either.
-        usable = stats.has_solution and self._is_feasible()
-        improved = (usable
+        def keep(stats):
+            """Adopt what the solver just returned, if it improves without spending money.
+
+            Read off the variables rather than the status, so a solver that reports the wrong one
+            can neither spend money nor hand back a schedule the model does not allow. A solve that
+            ran out of clock before finding an integer solution comes back without a solution and
+            has_solution refuses it; _is_feasible refuses whatever else came back off the model
+            (#159).
+            """
+            nonlocal undecided, best_stats
+            if not (stats.has_solution
+                    and self._is_feasible()
                     and pulp.value(self.preference_objective) > undecided
-                    and pulp.value(self.cost_objective) >= cost - budget - COST_BOUND_TOLERANCE)
-        if improved:
-            self.stats = stats
+                    and pulp.value(self.cost_objective) >= cost - budget - COST_BOUND_TOLERANCE):
+                return False
+            best.update({var: var.varValue for var in self.problem.variables()})
+            best_stats = stats
+            undecided = pulp.value(self.preference_objective)
+            return True
+
+        stages = []
+
+        # the floor. Same binaries, continuous variables free, so it runs regardless of what the
+        # clock says and the strategies get something even when the search below never starts.
+        pinned = self._pin_integers()
+        try:
+            with self._timed('tie_break'):
+                stats = self.problem.solve(self._solver(tmpdir, timeLimit=LP_PREFERENCE_TIME_LIMIT))
+                # CBC declares this LP infeasible on ~6% of production splits, over a bound the
+                # incumbent it just returned satisfies, see COST_BOUND_SLACK_CEILING. Walk the
+                # slack up until CBC can hold the row; keep() follows via budget.
+                while (stats.status == pulp.LpSolveStatus.Infeasible
+                       and slack < COST_BOUND_SLACK_CEILING):
+                    slack *= 10
+                    budget = self.settings.preference_budget + slack
+                    slack_var.upBound = slack
+                    stats = self.problem.solve(self._solver(tmpdir, timeLimit=LP_PREFERENCE_TIME_LIMIT))
+            label = 'LP' if slack == COST_BOUND_SLACK else f'LP (slack {slack:g})'
+            stages.append(label + ' ' + stats.status_str + ('' if keep(stats) else ' unused'))
+        finally:
+            self._unpin_integers(pinned)
+
+        # the tie break proper, on the slice _probe_then_split held back for it. Deciding the tie
+        # to proven optimality is its own hard problem, as expensive as the cost optimum on the
+        # very requests this is meant to help. What it does not finish is still an improvement.
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
+            stages.append('no time')
         else:
+            if remaining is not None:
+                remaining = min(remaining, self.settings.time_limit * PREFERENCE_TIME_SHARE,
+                                MILP_PREFERENCE_TIME_LIMIT)
+            # no warm start, although a feasible solution is right there in the variables. CBC
+            # 2.10.3, which pulp 3 bundled, mishandled a MIP start on this model: it returned a
+            # strictly worse schedule and reported it as proven optimal, and it declared the model
+            # infeasible over a cost bound the start itself satisfies. Measured on one captured
+            # request, preference -0.806 warm against -0.610 cold, the cold value matching a single
+            # joint solve to the last digit. Fixed upstream, the same LP and the same start file
+            # come back identical to the cold run on CBC 2.10.13, but the image ships 2.10.10 and
+            # that one has not been checked, so this stays until it is.
+            with self._timed('tie_break'):
+                stats = self.problem.solve(self._solver(tmpdir, timeLimit=remaining))
+            stages.append('MILP ' + stats.status_str + ('' if keep(stats) else ' unused'))
+
+        self.preference_stage = ', '.join(stages)
+        if all(stage.endswith('unused') or stage == 'no time' for stage in stages):
             self.preference_stage += ', kept the first stage'
-            for var, value in solution.items():
-                var.varValue = value
-            self.stats = first
+        for var, value in best.items():
+            var.varValue = value
+        self.stats = best_stats
+
+    def _solve_continuity(self, tmpdir: str, deadline: float | None) -> None:
+        """Prefer fewer charge starts without trading away economics or existing preferences.
+
+        A device reported as charging enters the horizon switched on, so keeping it on is free and
+        interrupting it costs a start.
+
+        Leaves continuity_stage behind, the way the tie break leaves preference_stage: what the
+        stage did, or why it did nothing, one string per solve for the request log.
+        """
+        if (self.stats is None or not self.stats.has_solution
+                or not _complete_solution(self.problem) or not self._is_integral()):
+            return
+
+        eligible = [i for i, active in self.variables['z_c'].items() if active is not None]
+
+        def count_starts() -> list[int]:
+            counts = []
+            for i in eligible:
+                active = np.array([pulp.value(v) for v in self.variables['c'][i]]) > CONTINUITY_TOLERANCE
+                counts.append(int(np.count_nonzero(active & ~np.r_[self.batteries[i].c_active, active[:-1]])))
+            return counts
+
+        before = count_starts()
+        # a device that is charging already can reach zero starts, one that is idle needs one
+        if all(count <= 1 - self.batteries[i].c_active for i, count in zip(eligible, before)):
+            return
+        remaining = self._continuity_clock(deadline)
+        if remaining is None:
+            return
+
+        solution = {var: var.varValue for var in self.problem.variables()}
+        cost = pulp.value(self.cost_objective)
+        # Normalize tiny preference coefficients so CBC's row tolerance cannot erase their bound.
+        # No terms means no strategy, and then there is no preference to hold.
+        preference_coefficients = coefficients_of(self.preference_objective)
+        scale = 1 / max((abs(value) for value in preference_coefficients if value), default=1)
+        preferred = pulp.value(self.preference_objective) * scale if preference_coefficients else None
+
+        peak_values = {side: pulp.value(self.variables[f'p_{side}_peak']) for side in self.peak_sides}
+        candidate, mirror = self._continuity_candidate(eligible, cost, preferred, scale, peak_values)
+
+        improved = False
+        try:
+            if deadline is not None:
+                remaining = min(remaining, deadline - time.monotonic())
+                if remaining <= 0:
+                    self.continuity_stage = 'no time'
+                    return
+            with self._timed('continuity'):
+                stats = candidate.solve(self._solver(tmpdir, timeLimit=remaining))
+            self.continuity_stage = 'MILP ' + stats.status_str + ' unused'
+            if not stats.has_solution or not _complete_solution(candidate):
+                return
+            # the copy solved, the model answers: take the candidate's schedule over by name
+            for var in self.problem.variables():
+                var.varValue = mirror[var.name].varValue
+            if not self._is_integral():
+                return
+            # CBC writes its solution with 8 significant digits, so a balance row over a 40 kWh
+            # SOC comes back off by up to 1e-3 and candidate.valid(1e-5) rejects every candidate
+            # (#146). CBC already held the model rows; only the bounds added here need checking.
+            after = count_starts()
+            improved = (pulp.value(self.cost_objective) >= cost - 2 * CONTINUITY_TOLERANCE
+                        and (preferred is None
+                             or pulp.value(self.preference_objective) * scale >= preferred - 2 * CONTINUITY_TOLERANCE)
+                        and all(pulp.value(self.variables[f'p_{side}_peak']) <= peak_values[side] + 2 * CONTINUITY_TOLERANCE
+                                for side in self.peak_sides)
+                        and sum(after) < sum(before))
+            if improved:
+                self.continuity_stage = f'improved {sum(before)} to {sum(after)}'
+        except pulp.PulpSolverError:
+            self.continuity_stage = 'solver error'
+        finally:
+            if not improved:
+                for var, value in solution.items():
+                    var.varValue = value
+
+    def _continuity_candidate(self, eligible, cost, preferred, scale, peak_values):
+        """The model plus a start per step, bounded by what the schedule in the variables reached.
+
+        A copy is a model of its own, so every row added here is written over the copy's
+        variables, found by name, and the reusable model keeps its constraints. Returns the copy
+        and that name map.
+        """
+        candidate = self.problem.copy()
+        mirror = candidate.variablesDict()
+
+        def mirrored(expression):
+            if isinstance(expression, pulp.LpVariable):
+                return pulp.LpAffineExpression.from_variable(mirror[expression.name])
+            return pulp.LpAffineExpression.from_list(
+                [(mirror[var.name], coefficient) for var, coefficient in expression.items()],
+                constant=expression.constant)
+
+        candidate += mirrored(self.cost_objective) >= cost - CONTINUITY_TOLERANCE
+        if preferred is not None:
+            candidate += mirrored(self.preference_objective) * scale >= preferred - CONTINUITY_TOLERANCE
+        for side, peak in peak_values.items():
+            candidate += mirror[self.variables[f'p_{side}_peak'].name] <= peak + CONTINUITY_TOLERANCE
+        starts = []
+        for i in eligible:
+            active = [mirror[var.name] for var in self.variables['z_c'][i]]
+            for t in self.time_steps:
+                start = candidate.add_variable(f'charge_start_{i}_{t}', lowBound=0, upBound=1)
+                candidate += start >= active[t] - (active[t - 1] if t else int(self.batteries[i].c_active))
+                starts.append(start)
+        candidate.setObjective(-pulp.lpSum(starts))
+        return candidate, mirror
+
+    def _continuity_clock(self, deadline: float | None) -> float | None:
+        """Seconds the continuity candidate may spend, or None with continuity_stage saying why not.
+
+        The candidate is this model plus a start per step, under a bound on the cost it just
+        optimized, so it is the harder problem: it does not finish inside the cap where the
+        incumbent took longer than that. Measured over five days of production, 14 % of joint
+        solves ran this stage and half of those sat on the cap with nothing to show (#146). The
+        incumbent's own clock says which ones they are before the cap is spent: the probe on the
+        joint path, the cost stage on the split path. Not the probe there: it spent its clock on
+        the joint objective and failed, and alone it is PROBE_SHARE of the time limit, so counting
+        it skipped the stage on every split request (#170).
+        """
+        spent = self.stage_seconds.get('cost', self.stage_seconds.get('probe', 0.))
+        if spent > CONTINUITY_TIME_LIMIT:
+            self.continuity_stage = f'skipped, solve took {spent:.1f} s'
+            return None
+        cap = CONTINUITY_TIME_LIMIT if self.solve_path == 'joint' else CONTINUITY_SPLIT_TIME_LIMIT
+        remaining = cap if deadline is None else min(cap, deadline - time.monotonic())
+        if remaining <= 0:
+            self.continuity_stage = 'no time'
+            return None
+        return remaining
 
     def _probe_then_split(self, tmpdir, deadline) -> None:
         """
@@ -830,7 +1130,8 @@ class Optimizer:
         probe_failed = False
         if probe != 0:
             try:
-                self.stats = self.problem.solve(self._solver(tmpdir, timeLimit=probe))
+                with self._timed('probe'):
+                    self.stats = self.problem.solve(self._solver(tmpdir, timeLimit=probe))
             except pulp.PulpSolverError as err:
                 # the probe is a shortcut, not the answer. A solver that fails on it (a non-zero
                 # exit once the clock stopped it has been reported) must not take the request down
@@ -861,9 +1162,16 @@ class Optimizer:
         gap_abs = self.settings.gap_abs
         scale = self.objective_scale
         self.problem.setObjective(self.cost_objective * scale)
-        remaining = None if deadline is None else max(deadline - time.monotonic(), 0.1)
-        self.stats = self.problem.solve(self._solver(tmpdir, timeLimit=remaining,
-                                                     gapAbs=None if gap_abs is None else gap_abs * scale))
+        # the tie break's slice comes off here rather than being whatever the cost stage did not
+        # use, see PREFERENCE_TIME_SHARE
+        reserve = (0. if self.settings.time_limit is None
+                   else self.settings.time_limit * PREFERENCE_TIME_SHARE)
+        remaining = None if deadline is None else max(min(COST_TIME_LIMIT, deadline - reserve - time.monotonic()), 0.1)
+        log_path = os.path.join(tmpdir, 'cost.log')
+        with self._timed('cost'):
+            self.stats = self.problem.solve(self._solver(tmpdir, timeLimit=remaining, logPath=log_path,
+                                                         gapAbs=None if gap_abs is None else gap_abs * scale))
+        self.cost_stage_gap = self._cbc_gap(log_path, scale)
 
         if self.stats.has_solution and self._is_feasible():
             # the cost stage is allowed to stop on its gap, so proven is not required of it, only
@@ -906,16 +1214,20 @@ class Optimizer:
         Returns a dictionary with the optimization results
         """
 
+        self.stage_seconds = {}
+        self.continuity_stage = 'not needed'
         # the cost bound the split adds cannot be updated in place, so a model that carries one
         # from an earlier solve is built again
         if self.problem is None or self.problem.get_constraint_by_name(COST_BOUND) is not None:
-            self.create_model()
+            with self._timed('build'):
+                self.create_model()
 
         # both stages share one wall clock, so a second solve cannot double the response time
         deadline = None if self.settings.time_limit is None else time.monotonic() + self.settings.time_limit
 
         with TemporaryDirectory() as tmpdir:
             self._probe_then_split(tmpdir, deadline)
+            self._solve_continuity(tmpdir, deadline)
 
         # back to the total worth of the solution, neither stage objective on its own
         self.problem.setObjective((self.cost_objective + self.preference_objective) * self.objective_scale)

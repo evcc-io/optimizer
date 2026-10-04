@@ -41,20 +41,34 @@ def before_request_func():
             return jsonify({"message": str(e)}), 401
 
 
-def dump_slow_request(payload, elapsed):
-    """Persist requests that exhausted the solver time limit, they are the ones worth replaying.
+def money(value):
+    """Currency for the request log, or None where a stage did not run."""
+    return None if value is None else round(value, 4)
+
+
+# money the capped cost stage may leave unproven between its schedule and CBC's bound before
+# the request is dumped for replay. The cap keeps requests short of the time limit, so the gap
+# is what marks the ones worth replaying at a longer clock.
+DUMP_GAP = 1.0
+
+
+def dump_slow_request(payload, elapsed, gap):
+    """Persist requests worth replaying: those that exhausted the solver time limit, and those
+    the cost stage left more than DUMP_GAP of money unproven on.
 
     The elapsed time covers model building as well as solving, so a request that only exceeds
     the limit while building is caught too. That one is equally worth looking at.
     """
     path, limit = settings.dump_slow_requests, settings.time_limit
-    if not path or limit is None or elapsed < limit:
+    slow = limit is not None and elapsed >= limit
+    unproven = gap is not None and gap > DUMP_GAP
+    if not path or not (slow or unproven):
         return
 
     # one line per request, carrying the same "request" key as test_cases/*.json so a line
     # can be replayed by the existing harness
     line = json.dumps({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                       "elapsed": round(elapsed, 3), "request": payload}) + "\n"
+                       "elapsed": round(elapsed, 3), "gap": money(gap), "request": payload}) + "\n"
     try:
         pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a") as f:
@@ -127,6 +141,7 @@ battery_config_model = api.model('BatteryConfig', {
     's_goal': fields.List(fields.Float, required=False, description='Goal state of charge at each time step (Wh)'),
     'c_min': fields.Float(required=True, description='Minimum charge power (W)'),
     'c_max': fields.Float(required=True, description='Maximum charge power (W)'),
+    'c_active': fields.Boolean(required=False, description='Whether the device is charging at the start of the time horizon.'),
     'd_max': fields.Float(required=True, description='Maximum discharge power (W)'),
     'p_a': fields.Float(required=True, description='Monetary value per Wh at end of the optimization horizon'),
     'c_priority': fields.Integer(required=False, description='Charging and discharging priority compared to other batteries. 2 = highest priority.')
@@ -217,6 +232,7 @@ class OptimizeCharging(Resource):
                     s_goal=bat_data.get('s_goal'),
                     c_min=bat_data['c_min'],
                     c_max=bat_data['c_max'],
+                    c_active=bat_data.get('c_active', False),
                     d_max=bat_data['d_max'],
                     p_a=bat_data['p_a'],
                     c_priority=bat_data.get('c_priority', 0),
@@ -263,7 +279,26 @@ class OptimizeCharging(Resource):
 
             started = time.perf_counter()
             result = optimizer.solve()
-            dump_slow_request(data, time.perf_counter() - started)
+            elapsed = time.perf_counter() - started
+
+            # one JSON line per request, so Log Analytics can attribute the response time to the
+            # solve stages. The access log only carries the total.
+            # evcc stamps its version on every request as evcc/<version>, so a change in the
+            # solve mix can be read against the release that sent it
+            print(json.dumps({"solve": {
+                "client": request.headers.get('User-Agent'),
+                "elapsed": round(elapsed, 3),
+                "stages": optimizer.stage_seconds,
+                "path": optimizer.solve_path,
+                "preferences": optimizer.preference_stage,
+                "continuity": optimizer.continuity_stage,
+                "cost_stage_value": money(optimizer.cost_stage_value),
+                "cost_stage_gap": money(optimizer.cost_stage_gap),
+                "status": result.get('status'),
+                "steps": optimizer.T,
+            }}), flush=True)
+
+            dump_slow_request(data, elapsed, optimizer.cost_stage_gap)
             return result
 
         except Exception as e:
