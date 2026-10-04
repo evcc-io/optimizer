@@ -1,0 +1,109 @@
+{
+    "strict": true,
+    "request": {
+        "batteries": [
+            {
+                "charge_from_grid": false,
+                "discharge_to_grid": false,
+                "s_capacity": 2000,
+                "s_min": 0,
+                "s_max": 2000,
+                "s_initial": 0,
+                "c_min": 0,
+                "c_max": 2000,
+                "d_max": 0,
+                "p_a": 0.0002
+            }
+        ],
+        "time_series": {
+            "dt": [
+                3600,
+                3600,
+                3600,
+                3600
+            ],
+            "gt": [
+                0,
+                0,
+                0,
+                0
+            ],
+            "ft": [
+                0,
+                2000,
+                0,
+                2000
+            ],
+            "ft_err": [
+                0,
+                200,
+                0,
+                1000
+            ],
+            "p_N": [
+                0.0003,
+                0.0003,
+                0.0003,
+                0.0003
+            ],
+            "p_E": [
+                0.0001,
+                0.00011,
+                0.0001,
+                0.0001
+            ]
+        },
+        "eta_c": 0.95,
+        "eta_d": 0.95
+    },
+    "expected_response": {
+        "status": "Optimal",
+        "objective_value": 0.5984210502,
+        "limit_violations": {
+            "grid_import_limit_exceeded": false,
+            "grid_export_limit_hit": false
+        },
+        "batteries": [
+            {
+                "charging_power": [
+                    0.0,
+                    1105.2632,
+                    0.0,
+                    1000.0
+                ],
+                "discharging_power": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                ],
+                "state_of_charge": [
+                    0.0,
+                    1050.0,
+                    1050.0,
+                    2000.0
+                ]
+            }
+        ],
+        "grid_import": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+        ],
+        "grid_export": [
+            0.0,
+            894.73684,
+            0.0,
+            1000.0
+        ],
+        "flow_direction": [
+            1,
+            1,
+            1,
+            1
+        ],
+        "grid_import_overshoot": [],
+        "grid_export_overshoot": []
+    }
+}

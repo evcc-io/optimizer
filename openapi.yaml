@@ -325,6 +325,18 @@ components:
             minimum: 0
           description: Grid export remuneration per Wh at each time step (currency units/Wh)
           example: [0.15, 0.12, 0.10, 0.11, 0.14, 0.16]
+        ft_err:
+          type: array
+          items:
+            type: number
+            minimum: 0
+          description: |
+            Standard deviation of the generation forecast at each time step (Wh). Where given, the grid
+            cost of the step is the mean over the generation coming in at ft - ft_err and at ft + ft_err
+            instead of the cost at ft. The schedule is the same in both, the deviation lands on the grid:
+            relying on forecasted generation that may fall short is charged the import it then needs.
+            Steps where export pays more than import are evaluated at ft.
+          example: [0, 600, 1600, 2100, 1600, 500]
 
     OptimizationInput:
       type: object

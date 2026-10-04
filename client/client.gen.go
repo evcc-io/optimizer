@@ -250,6 +250,13 @@ type TimeSeries struct {
 	// Ft Forecasted energy generation (e.g., solar PV) at each time step (Wh)
 	Ft []float32 `json:"ft"`
 
+	// FtErr Standard deviation of the generation forecast at each time step (Wh). Where given, the grid
+	// cost of the step is the mean over the generation coming in at ft - ft_err and at ft + ft_err
+	// instead of the cost at ft. The schedule is the same in both, the deviation lands on the grid:
+	// relying on forecasted generation that may fall short is charged the import it then needs.
+	// Steps where export pays more than import are evaluated at ft.
+	FtErr []float32 `json:"ft_err,omitempty"`
+
 	// Gt Household energy demand at each time step (Wh)
 	Gt []float32 `json:"gt"`
 
