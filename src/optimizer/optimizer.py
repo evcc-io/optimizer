@@ -326,6 +326,15 @@ class Optimizer:
         weights[-1] += 1 - weights.sum()
         return weights
 
+    def _present(self, bat: BatteryConfig) -> np.ndarray:
+        """
+        1 for the steps the device may still be connected at the start of, 0 once it has certainly left
+        """
+        if bat.r_departure is None:
+            return np.ones(self.T)
+        gone = np.cumsum(bat.r_departure) >= 1 - 1e-6
+        return np.concatenate(([1.], 1. - gone[:-1]))
+
     def create_model(self):
         """
         Create and initialize the MILP model
@@ -347,16 +356,18 @@ class Optimizer:
         # Charging power variables [Wh]
         self.variables['c'] = {}
         for i, bat in enumerate(self.batteries):
+            present = self._present(bat)
             self.variables['c'][i] = [
-                pulp.LpVariable(f"c_{i}_{t}", lowBound=0, upBound=bat.c_max * self.time_series.dt[t] / 3600.)
+                pulp.LpVariable(f"c_{i}_{t}", lowBound=0, upBound=bat.c_max * self.time_series.dt[t] / 3600. * present[t])
                 for t in self.time_steps
             ]
 
         # Discharging power variables [Wh]
         self.variables['d'] = {}
         for i, bat in enumerate(self.batteries):
+            present = self._present(bat)
             self.variables['d'][i] = [
-                pulp.LpVariable(f"d_{i}_{t}", lowBound=0, upBound=bat.d_max * self.time_series.dt[t] / 3600.)
+                pulp.LpVariable(f"d_{i}_{t}", lowBound=0, upBound=bat.d_max * self.time_series.dt[t] / 3600. * present[t])
                 for t in self.time_steps
             ]
 

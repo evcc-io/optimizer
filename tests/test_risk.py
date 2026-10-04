@@ -43,6 +43,24 @@ def test_departure_value_is_the_expected_state_of_charge():
     assert numpy.isclose(result['objective_value'], expected)
 
 
+def test_a_device_that_has_certainly_left_does_not_charge():
+    # free surplus after the departure and a strategy that prefers charging over exporting it: the
+    # value is nil either way, and only the bound keeps the tie break from charging a gone vehicle
+    request = {
+        'strategy': {'charging_strategy': 'charge_before_export'},
+        'batteries': [{'charge_from_grid': True, 's_min': 0, 's_max': 20000, 's_initial': 0, 'c_min': 0, 'c_max': 5000,
+                       'd_max': 0, 'p_a': 0.00035, 'r_departure': [0, 0, 1, 0, 0, 0]}],
+        'time_series': {'dt': [3600] * 6, 'gt': [0] * 6, 'ft': [0, 0, 0, 3000, 3000, 0],
+                        'p_N': [0.0003] * 6, 'p_E': [0] * 6},
+    }
+
+    result = solve(request)
+
+    assert charging(result)[:3].tolist() == [5000, 5000, 5000]
+    assert charging(result)[3:].tolist() == [0, 0, 0]
+    assert result['grid_export'][3:5] == [3000, 3000]
+
+
 @pytest.mark.parametrize('r_departure', [[0.5, 0.6, 0, 0], [-0.1, 0.5, 0, 0]])
 def test_departure_probabilities_are_validated(r_departure):
     request = copy.deepcopy(DEPARTURE)
