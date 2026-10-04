@@ -1,0 +1,38 @@
+#cloud-config
+# First boot of a VM floor node. Kept free of anything that changes between deploys
+# (image tag, certificate): customData is immutable on a VM, and a Spot restore boots
+# a fresh instance from this exact content. Everything variable comes from Key Vault
+# and the VM tags at run time, see update.sh.
+package_update: true
+packages:
+  - docker.io
+  - docker-compose-v2
+  - certbot
+  - jq
+  - netcat-openbsd
+
+write_files:
+  - path: /opt/optimizer/haproxy.cfg
+    encoding: b64
+    content: __HAPROXY_B64__
+  - path: /opt/optimizer/docker-compose.yml
+    encoding: b64
+    content: __COMPOSE_B64__
+  - path: /opt/optimizer/update.sh
+    encoding: b64
+    permissions: "0755"
+    content: __UPDATE_B64__
+  - path: /opt/optimizer/acme-hook.sh
+    encoding: b64
+    permissions: "0755"
+    content: __ACME_HOOK_B64__
+  - path: /etc/cron.d/optimizer-cert
+    content: |
+      */30 * * * * root /opt/optimizer/update.sh --cert-only
+
+runcmd:
+  - systemctl enable --now docker
+  - mkdir -p /opt/optimizer/certs /var/run/haproxy
+  # self-signed placeholder so haproxy starts before the first Let's Encrypt certificate arrives
+  - openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=__HOSTNAME__" -keyout /tmp/key.pem -out /tmp/cert.pem && cat /tmp/cert.pem /tmp/key.pem > /opt/optimizer/certs/__HOSTNAME__.pem && rm -f /tmp/key.pem /tmp/cert.pem
+  - /opt/optimizer/update.sh

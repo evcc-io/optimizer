@@ -1,0 +1,24 @@
+# /opt/optimizer on each VM. IMAGE and JWT_TOKEN_SECRET come from .env, written by update.sh.
+services:
+  optimizer:
+    image: ${IMAGE}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:7050:7050"
+    environment:
+      OPTIMIZER_TIME_LIMIT: "10"
+      OPTIMIZER_NUM_THREADS: "1"
+      OPTIMIZER_DUMP_SLOW_REQUESTS: /tmp/slow-requests.jsonl
+      JWT_TOKEN_SECRET: ${JWT_TOKEN_SECRET}
+      # one worker per vCPU, same reasoning as the Container Apps replica (see main.bicep)
+      GUNICORN_CMD_ARGS: "--workers __WORKERS__ --timeout 60 --max-requests 100 --max-requests-jitter 50 --config python:optimizer.gunicorn_conf --access-logfile - --access-logformat '%(m)s %(U)s %(s)s %(D)s'"
+
+  haproxy:
+    image: haproxy:3.0
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./certs:/certs:ro
+      - /var/run/haproxy:/var/run/haproxy
+      - /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro
