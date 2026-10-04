@@ -280,6 +280,19 @@ components:
           maximum: 2
           default: 0
           description: Charging and discharging priority 0..2 compared to other batteries. 2 = highest priority.
+        p_departure:
+          type: array
+          items:
+            type: number
+            minimum: 0
+            maximum: 1
+          description: |
+            Probability that the device leaves during each time step, summing to at most 1. The remainder
+            is the probability it stays past the horizon. p_a then values the state of charge the device
+            is expected to leave with instead of the state at the end of the horizon, so a charge that may
+            be cut short by the departure is worth less than one that is already in. Without it the device
+            is assumed to stay.
+          example: [0, 0, 0.1, 0.3, 0.4, 0]
 
     TimeSeries:
       type: object
@@ -325,6 +338,18 @@ components:
             minimum: 0
           description: Grid export remuneration per Wh at each time step (currency units/Wh)
           example: [0.15, 0.12, 0.10, 0.11, 0.14, 0.16]
+        ft_err:
+          type: array
+          items:
+            type: number
+            minimum: 0
+          description: |
+            Standard deviation of the generation forecast at each time step (Wh). Where given, the grid
+            cost of the step is the mean over the generation coming in at ft - ft_err and at ft + ft_err
+            instead of the cost at ft. The schedule is the same in both, the deviation lands on the grid:
+            relying on forecasted generation that may fall short is charged the import it then needs.
+            Steps where export pays more than import are evaluated at ft.
+          example: [0, 600, 1600, 2100, 1600, 500]
 
     OptimizationInput:
       type: object

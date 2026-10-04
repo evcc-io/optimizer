@@ -144,7 +144,9 @@ battery_config_model = api.model('BatteryConfig', {
     'c_active': fields.Boolean(required=False, description='Whether the device is charging at the start of the time horizon.'),
     'd_max': fields.Float(required=True, description='Maximum discharge power (W)'),
     'p_a': fields.Float(required=True, description='Monetary value per Wh at end of the optimization horizon'),
-    'c_priority': fields.Integer(required=False, description='Charging and discharging priority compared to other batteries. 2 = highest priority.')
+    'c_priority': fields.Integer(required=False, description='Charging and discharging priority compared to other batteries. 2 = highest priority.'),
+    'p_departure': fields.List(fields.Float, required=False,
+                               description='Probability that the device leaves during each time step. The remainder stays past the horizon.'),
 })
 
 time_series_model = api.model('TimeSeries', {
@@ -153,6 +155,8 @@ time_series_model = api.model('TimeSeries', {
     'ft': fields.List(fields.Float, required=True, description='Forecasted solar generation at each time step (Wh)'),
     'p_N': fields.List(fields.Float, required=True, description='Price per Wh taken from grid at each time step'),
     'p_E': fields.List(fields.Float, required=True, description='Remuneration per Wh fed into grid at each time step'),
+    'ft_err': fields.List(fields.Float, required=False,
+                          description='Standard deviation of the solar forecast at each time step (Wh). Grid cost is taken as the mean over ft +- ft_err.'),
 })
 
 optimization_input_model = api.model('OptimizationInput', {
@@ -236,6 +240,7 @@ class OptimizeCharging(Resource):
                     d_max=bat_data['d_max'],
                     p_a=bat_data['p_a'],
                     c_priority=bat_data.get('c_priority', 0),
+                    p_departure=bat_data.get('p_departure'),
                 ))
 
             # Parse time series data
@@ -245,6 +250,7 @@ class OptimizeCharging(Resource):
                 ft=data['time_series']['ft'],
                 p_N=data['time_series']['p_N'],
                 p_E=data['time_series']['p_E'],
+                ft_err=data['time_series'].get('ft_err'),
             )
 
             # Validate time series lengths. dt included: the model indexes every series by it,
@@ -254,11 +260,19 @@ class OptimizeCharging(Resource):
                 'p_N': len(time_series.p_N), 'p_E': len(time_series.p_E),
                 'p_demand': [len(bat.p_demand) for bat in batteries if bat.p_demand is not None],
                 's_goal': [len(bat.s_goal) for bat in batteries if bat.s_goal is not None],
+                'p_departure': [len(bat.p_departure) for bat in batteries if bat.p_departure is not None],
             }
+            if time_series.ft_err is not None:
+                lengths['ft_err'] = len(time_series.ft_err)
 
-            if len({*[v for k, v in lengths.items() if k not in ('p_demand', 's_goal')],
-                    *lengths['p_demand'], *lengths['s_goal']}) > 1:
+            per_battery = ('p_demand', 's_goal', 'p_departure')
+            if len({*[v for k, v in lengths.items() if k not in per_battery],
+                    *[n for k in per_battery for n in lengths[k]]}) > 1:
                 api.abort(400, "All time series must have the same length", lengths=lengths)
+
+            for bat in batteries:
+                if bat.p_departure is not None and (min(bat.p_departure) < 0 or sum(bat.p_departure) > 1 + 1e-6):
+                    api.abort(400, "p_departure must be probabilities summing to at most 1")
 
         except BadRequest:
             raise

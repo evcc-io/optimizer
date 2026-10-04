@@ -92,13 +92,15 @@ A schedule the solver stopped on at the limit is reported as `Feasible` rather t
       "c_min": 1380, "c_max": 11000, "d_max": 0,                             // W
       "s_goal": [0, 0, 0, 0, 0, 0, 0, 40000, 0, 0, 0, 0],                    // Wh per step
       "charge_from_grid": true,
-      "p_a": 0.00022                                     // value of stored energy, per Wh
+      "p_a": 0.00022,                                    // value of stored energy, per Wh
+      "p_departure": [0, 0, 0, 0, 0, 0, 0, 0.1, 0.3, 0.4, 0, 0]              // chance of leaving, per step
     }
   ],
   "time_series": {
     "dt": [3600, 3600, 3600, 3600, 3600, 3600, 3600, 3600, 3600, 3600, 3600, 3600],
     "gt": [230, 210, 205, 205, 240, 380, 780, 920, 640, 480, 430, 460],   // demand, Wh
     "ft": [0, 0, 0, 0, 0, 60, 320, 850, 1600, 2500, 3300, 3900],          // PV forecast, Wh
+    "ft_err": [0, 0, 0, 0, 0, 30, 160, 430, 800, 1250, 1650, 1950],       // its standard deviation, Wh
     "p_N": [0.00026, 0.00024, 0.00023, 0.00023, 0.00025, 0.00030,
             0.00036, 0.00041, 0.00038, 0.00032, 0.00027, 0.00022],        // import, per Wh
     "p_E": [0.00008, 0.00008, 0.00008, 0.00008, 0.00008, 0.00008,

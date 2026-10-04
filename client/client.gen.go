@@ -83,6 +83,13 @@ type BatteryConfig struct {
 	// PDemand Minimum charge demand per time step (Wh)
 	PDemand []float32 `json:"p_demand,omitempty"`
 
+	// PDeparture Probability that the device leaves during each time step, summing to at most 1. The remainder
+	// is the probability it stays past the horizon. p_a then values the state of charge the device
+	// is expected to leave with instead of the state at the end of the horizon, so a charge that may
+	// be cut short by the departure is worth less than one that is already in. Without it the device
+	// is assumed to stay.
+	PDeparture []float32 `json:"p_departure,omitempty"`
+
 	// SCapacity The capacity at 100% SOC in Wh. If not specified s_capacity will be set to s_max.
 	// s_initial must be less or equal s_capacity, otherwise the optimization will return an error.
 	SCapacity float32 `json:"s_capacity,omitempty"`
@@ -249,6 +256,13 @@ type TimeSeries struct {
 
 	// Ft Forecasted energy generation (e.g., solar PV) at each time step (Wh)
 	Ft []float32 `json:"ft"`
+
+	// FtErr Standard deviation of the generation forecast at each time step (Wh). Where given, the grid
+	// cost of the step is the mean over the generation coming in at ft - ft_err and at ft + ft_err
+	// instead of the cost at ft. The schedule is the same in both, the deviation lands on the grid:
+	// relying on forecasted generation that may fall short is charged the import it then needs.
+	// Steps where export pays more than import are evaluated at ft.
+	FtErr []float32 `json:"ft_err,omitempty"`
 
 	// Gt Household energy demand at each time step (Wh)
 	Gt []float32 `json:"gt"`
