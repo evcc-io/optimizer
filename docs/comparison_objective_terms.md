@@ -38,4 +38,9 @@
   then maximizes tier 3 over the schedules that keep that value, so the distance between the tiers
   no longer decides whether a preference is respected. The ranges listed above are what the second
   stage works on, and it normalizes them off its own largest coefficient before solving.
-
+- After those objectives are decided, a final pass minimizes charging starts for batteries with
+  `c_min > 0`. It bounds both achieved objectives and each leveled grid peak separately, so fewer
+  interruptions cannot compensate for worse economics, preferences, or peaks beyond numerical
+  tolerances. This pass adds no term to either earlier objective. It runs only for fragmented
+  schedules, uses at most one second of solver time within the remaining request budget, and
+  retains the incumbent unless a valid schedule has fewer actual starts.
