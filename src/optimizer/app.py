@@ -265,7 +265,23 @@ class OptimizeCharging(Resource):
 
             started = time.perf_counter()
             result = optimizer.solve()
-            dump_slow_request(data, time.perf_counter() - started)
+            elapsed = time.perf_counter() - started
+
+            # one JSON line per request, so Log Analytics can attribute the response time to the
+            # solve stages. The access log only carries the total.
+            # evcc stamps its version on every request as evcc/<version>, so a change in the
+            # solve mix can be read against the release that sent it
+            print(json.dumps({"solve": {
+                "client": request.headers.get('User-Agent'),
+                "elapsed": round(elapsed, 3),
+                "stages": optimizer.stage_seconds,
+                "path": optimizer.solve_path,
+                "preferences": optimizer.preference_stage,
+                "status": result.get('status'),
+                "steps": optimizer.T,
+            }}), flush=True)
+
+            dump_slow_request(data, elapsed)
             return result
 
         except Exception as e:

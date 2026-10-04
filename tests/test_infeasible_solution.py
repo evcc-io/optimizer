@@ -79,7 +79,7 @@ def test_a_preference_stage_off_the_rows_is_not_kept(monkeypatch):
         calls.append(1)
         if len(calls) == 1:          # the cost stage, left alone
             return real_solve(*args, **kwargs)
-        break_a_row(optimizer)       # the preference stage
+        break_a_row(optimizer)       # the preference stage, LP floor and MILP alike
         optimizer.problem.status = pulp.LpStatusOptimal
         optimizer.problem.sol_status = pulp.LpSolutionOptimal
         return optimizer.problem.status
@@ -87,7 +87,7 @@ def test_a_preference_stage_off_the_rows_is_not_kept(monkeypatch):
     monkeypatch.setattr(optimizer.problem, 'solve', solve)
     result = optimizer.solve()
 
-    assert len(calls) == 2, f'the preference stage did not run, {len(calls)} solves'
+    assert len(calls) == 3, f'the preference stage did not run both solves, {len(calls)} solves'
     assert optimizer.preference_stage.endswith('kept the first stage'), \
         f'preference stage ended as {optimizer.preference_stage}'
     assert result['status'] in ('Optimal', 'Feasible'), f"reported {result['status']}"

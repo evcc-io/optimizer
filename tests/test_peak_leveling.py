@@ -1,7 +1,28 @@
+import json
+import pathlib
+
 import numpy
 import pytest
+from test_objective_split import build as build_case
 
 from optimizer.optimizer import BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
+
+# the one stored case long enough to make the solve split. The small ones are all proved outright by
+# the probe, so none of them ever reaches the tie break's own budget, which is where levelling was
+# being lost. 245 steps, 4450 variables, 1263 binaries.
+LONG_CASE = '028-attenuate-grid-peaks-long-horizon'
+
+
+def grid_peaks(request, response):
+    """max grid power per side [W]. Kept per side on purpose: attenuate_grid_peaks levels both,
+    and a max() across them lets a regression on one hide behind the larger of the two."""
+    dt = numpy.array(request['time_series']['dt'], float)
+    return {key: float((numpy.array(response[key], float) * 3600 / dt).max())
+            for key in ('grid_import', 'grid_export')}
+
+
+def long_case():
+    return json.loads(pathlib.Path(f'test_cases/{LONG_CASE}.json').read_text())
 
 
 def build(strategy='attenuate_demand_peaks', dt=None, gt=None, ft=None, c_max=8000., d_max=0.,
@@ -90,3 +111,45 @@ def test_a_pinned_peak_leaves_the_steps_below_it_unordered():
     assert (flat_out * dt).sum() == pytest.approx((spread * dt).sum(), rel=1e-3)
     assert flat_out.max() == pytest.approx(spread.max())
     assert spread.std() < flat_out.std() / 1.5
+
+
+def test_the_long_horizon_case_levels_both_sides():
+    # the stored expectation only compares status and objective value, and the tie break is cost
+    # neutral by contract, so the objective is identical whether the profile was levelled or not.
+    # The peaks are the part worth pinning.
+    case = long_case()
+    model = build_case(LONG_CASE)
+    result = model.solve()
+
+    assert result['status'] == 'Optimal'
+    peaks = grid_peaks(case['request'], result)
+    stored = grid_peaks(case['request'], case['expected_response'])
+    for key, value in peaks.items():
+        assert value <= stored[key] + 1, f'{key} peaked at {value} W, stored is {stored[key]} W'
+
+
+def test_the_long_horizon_case_still_levels_once_the_solve_splits():
+    # the regression this guards. The probe cannot prove this request on a production core, so the
+    # split runs, and the cost stage used to be handed the whole clock: it is anytime branch and
+    # bound and spent all of it, leaving the tie break with 'no time'. The answer came back cost
+    # optimal with no levelling at all, 3609 W of export peak against the 1606 W the same money
+    # buys, and only a 'Feasible' status to show for it.
+    #
+    # The threshold sits between the two so the test states which of them came back rather than
+    # pinning a schedule: CBC may pick a different optimum of equal value on another build.
+    case = long_case()
+    model = build_case(LONG_CASE)
+    model.settings.probe_seconds = 0      # force the split the probe would otherwise avoid here
+    model.settings.time_limit = 5.
+    result = model.solve()
+
+    assert result['status'] in ('Optimal', 'Feasible'), result['status']
+    peaks = grid_peaks(case['request'], result)
+    assert peaks['grid_export'] < 2400, \
+        f"export peaked at {peaks['grid_export']} W, unlevelled is 3609 W and levelled 1606 W"
+
+    # the import side is levelled by the MILP tie break, and only reaches 200 W when that stage
+    # gets to finish. The pinned LP floor alone reaches 1286 W, which is what a slower machine
+    # will see here, so this asserts the floor ran rather than the peak the search would find.
+    assert peaks['grid_import'] < 1350, \
+        f"import peaked at {peaks['grid_import']} W, unlevelled is 1417 W and the LP floor 1286 W"
