@@ -83,12 +83,12 @@ type BatteryConfig struct {
 	// PDemand Minimum charge demand per time step (Wh)
 	PDemand []float32 `json:"p_demand,omitempty"`
 
-	// PDeparture Probability that the device leaves during each time step, summing to at most 1. The remainder
+	// RDeparture Probability that the device leaves during each time step, summing to at most 1. The remainder
 	// is the probability it stays past the horizon. p_a then values the state of charge the device
 	// is expected to leave with instead of the state at the end of the horizon, so a charge that may
 	// be cut short by the departure is worth less than one that is already in. Without it the device
 	// is assumed to stay.
-	PDeparture []float32 `json:"p_departure,omitempty"`
+	RDeparture []float32 `json:"r_departure,omitempty"`
 
 	// SCapacity The capacity at 100% SOC in Wh. If not specified s_capacity will be set to s_max.
 	// s_initial must be less or equal s_capacity, otherwise the optimization will return an error.

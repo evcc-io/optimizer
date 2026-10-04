@@ -145,7 +145,7 @@ battery_config_model = api.model('BatteryConfig', {
     'd_max': fields.Float(required=True, description='Maximum discharge power (W)'),
     'p_a': fields.Float(required=True, description='Monetary value per Wh at end of the optimization horizon'),
     'c_priority': fields.Integer(required=False, description='Charging and discharging priority compared to other batteries. 2 = highest priority.'),
-    'p_departure': fields.List(fields.Float, required=False,
+    'r_departure': fields.List(fields.Float, required=False,
                                description='Probability that the device leaves during each time step. The remainder stays past the horizon.'),
 })
 
@@ -238,7 +238,7 @@ class OptimizeCharging(Resource):
                     d_max=bat_data['d_max'],
                     p_a=bat_data['p_a'],
                     c_priority=bat_data.get('c_priority', 0),
-                    p_departure=bat_data.get('p_departure'),
+                    r_departure=bat_data.get('r_departure'),
                 ))
 
             # Parse time series data
@@ -257,10 +257,10 @@ class OptimizeCharging(Resource):
                 'p_N': len(time_series.p_N), 'p_E': len(time_series.p_E),
                 'p_demand': [len(bat.p_demand) for bat in batteries if bat.p_demand is not None],
                 's_goal': [len(bat.s_goal) for bat in batteries if bat.s_goal is not None],
-                'p_departure': [len(bat.p_departure) for bat in batteries if bat.p_departure is not None],
+                'r_departure': [len(bat.r_departure) for bat in batteries if bat.r_departure is not None],
             }
 
-            per_battery = ('p_demand', 's_goal', 'p_departure')
+            per_battery = ('p_demand', 's_goal', 'r_departure')
             if len({*[v for k, v in lengths.items() if k not in per_battery],
                     *[n for k in per_battery for n in lengths[k]]}) > 1:
                 api.abort(400, "All time series must have the same length", lengths=lengths)
@@ -269,8 +269,8 @@ class OptimizeCharging(Resource):
                 api.abort(400, "Time series must not be empty")
 
             for bat in batteries:
-                if bat.p_departure is not None and (min(bat.p_departure) < 0 or sum(bat.p_departure) > 1 + 1e-6):
-                    api.abort(400, "p_departure must be probabilities summing to at most 1")
+                if bat.r_departure is not None and (min(bat.r_departure) < 0 or sum(bat.r_departure) > 1 + 1e-6):
+                    api.abort(400, "r_departure must be probabilities summing to at most 1")
 
         except BadRequest:
             raise

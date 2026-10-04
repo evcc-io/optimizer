@@ -33,7 +33,7 @@ def with_departure(req):
     p = np.where(window, 0.3 / window.sum(), 0.0)
     for bat in req['batteries']:
         if bat['d_max'] == 0:
-            bat['p_departure'] = p.tolist()
+            bat['r_departure'] = p.tolist()
     return req
 
 
@@ -41,14 +41,14 @@ def without_departure(req):
     """the request as the reference revision understands it"""
     req = copy.deepcopy(req)
     for bat in req['batteries']:
-        bat.pop('p_departure', None)
+        bat.pop('r_departure', None)
     return req
 
 
 def build_new(req):
     opt = build(new, without_departure(req))
     for bat, cfg in zip(req['batteries'], opt.batteries):
-        cfg.p_departure = bat.get('p_departure')
+        cfg.r_departure = bat.get('r_departure')
     return new.Optimizer(opt.strategy, opt.grid, opt.batteries, opt.time_series, opt.eta_c, opt.eta_d, opt.M)
 
 

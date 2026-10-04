@@ -93,7 +93,7 @@ A schedule the solver stopped on at the limit is reported as `Feasible` rather t
       "s_goal": [0, 0, 0, 0, 0, 0, 0, 40000, 0, 0, 0, 0],                    // Wh per step
       "charge_from_grid": true,
       "p_a": 0.00022,                                    // value of stored energy, per Wh
-      "p_departure": [0, 0, 0, 0, 0, 0, 0, 0.1, 0.3, 0.4, 0, 0]              // chance of leaving, per step
+      "r_departure": [0, 0, 0, 0, 0, 0, 0, 0.1, 0.3, 0.4, 0, 0]              // chance of leaving, per step
     }
   ],
   "time_series": {

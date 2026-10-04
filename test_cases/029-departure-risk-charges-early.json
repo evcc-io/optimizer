@@ -13,7 +13,7 @@
                 "c_max": 5000,
                 "d_max": 0,
                 "p_a": 0.00035,
-                "p_departure": [
+                "r_departure": [
                     0.3,
                     0,
                     0,

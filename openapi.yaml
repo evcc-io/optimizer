@@ -280,7 +280,7 @@ components:
           maximum: 2
           default: 0
           description: Charging and discharging priority 0..2 compared to other batteries. 2 = highest priority.
-        p_departure:
+        r_departure:
           type: array
           items:
             type: number

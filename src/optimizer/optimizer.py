@@ -207,7 +207,7 @@ class BatteryConfig:
     s_goal: Optional[List[float]] = None  # Goal state of charge (Wh)
     c_priority: int = 0
     c_active: bool = False  # Whether the device is charging at the start of the horizon
-    p_departure: Optional[List[float]] = None  # Probability the device leaves during each step
+    r_departure: Optional[List[float]] = None  # Probability the device leaves during each step
 
 
 @dataclass
@@ -321,8 +321,8 @@ class Optimizer:
         departure probabilities that is the last step alone.
         """
         weights = np.zeros(self.T)
-        if bat.p_departure is not None:
-            weights[:] = bat.p_departure
+        if bat.r_departure is not None:
+            weights[:] = bat.r_departure
         if self.T:
             weights[-1] += 1 - weights.sum()
         return weights
