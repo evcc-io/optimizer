@@ -160,12 +160,16 @@ COST_TIME_LIMIT = 3.0
 # spent its whole clock on the money gets no strategy at all.
 LP_PREFERENCE_TIME_LIMIT = 1.0
 
-# clock the continuity candidate may spend, and the solve time above which it is not tried at all,
-# see _continuity_clock. Always bounded by the request deadline. 1 s let the stage run on split
-# requests whose cost stage finished under a second, 45 % of them in production, and every one
-# of those ended at the cap with nothing kept, where the stored #170 request needs 1.1 s. The
-# production split ends around 5 to 6 s of the 10 s limit, so 2.5 s fits inside what is left.
-CONTINUITY_TIME_LIMIT = 2.5
+# solve time above which the continuity stage is not tried at all, and the clock the candidate
+# gets on the joint path, see _continuity_clock. The joint path is 97 % of the traffic and a tenth
+# of a second there is replicas: one cap for every path at 2.5 s lifted its mean solve from 0.57
+# to 0.67 s within minutes, for a split improvement rate of 6.4 instead of 4.9 %.
+CONTINUITY_TIME_LIMIT = 1.0
+# clock the candidate gets on a split. That request has paid for a probe that proved nothing and
+# ends around 5 to 6 s of the 10 s limit, so 2.5 s fits inside what is left, and 1 s was too short:
+# every split that ran the stage at 1 s ended at the cap, where the stored #170 request needs 1.1 s.
+# Both bounded by the request deadline.
+CONTINUITY_SPLIT_TIME_LIMIT = 2.5
 CONTINUITY_TOLERANCE = 1e-5
 
 # a cbc on PATH is preferred over the one pulp bundles, which is 2.10.3 built Dec 2019 and gets a
@@ -1056,7 +1060,8 @@ class Optimizer:
         if spent > CONTINUITY_TIME_LIMIT:
             self.continuity_stage = f'skipped, solve took {spent:.1f} s'
             return None
-        remaining = CONTINUITY_TIME_LIMIT if deadline is None else min(CONTINUITY_TIME_LIMIT, deadline - time.monotonic())
+        cap = CONTINUITY_TIME_LIMIT if self.solve_path == 'joint' else CONTINUITY_SPLIT_TIME_LIMIT
+        remaining = cap if deadline is None else min(cap, deadline - time.monotonic())
         if remaining <= 0:
             self.continuity_stage = 'no time'
             return None
