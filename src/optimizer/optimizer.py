@@ -102,6 +102,11 @@ COST_BOUND_TOLERANCE = 1e-4
 # from a relaxation rather than from a rounding difference.
 INTEGRALITY_TOLERANCE = 1e-5
 
+# how far a row or bound may be missed and the schedule still count as honouring the model. CBC
+# writes its solution with 8 significant digits, so a balance row over a 40 kWh SOC comes back off
+# by up to 1e-3 Wh, while a schedule that breaks the model misses by whole charging steps.
+FEASIBILITY_TOLERANCE = 1e-2
+
 # share of OPTIMIZER_TIME_LIMIT the probe gets before the solve falls back to the split. Kept well
 # under half: the probe is pure loss on a request that ends up splitting anyway, so it should be
 # long enough to catch the ordinary ones and no longer. Measured over the captured slow requests,
@@ -824,12 +829,14 @@ class Optimizer:
             ran out of clock before finding an integer solution leaves the relaxation behind and
             pulp reads that back like any other result: it scores as a large improvement precisely
             because it is one the model forbids, with every rule the binaries gate no longer
-            holding, c_min among them. That is what the sol_status check refuses.
+            holding, c_min among them. That is what the sol_status check refuses, and _is_feasible
+            refuses whatever else came back off the model (#159).
             """
             nonlocal undecided
             integral = self.problem.sol_status in (pulp.LpSolutionOptimal,
                                                    pulp.LpSolutionIntegerFeasible)
             if not (integral
+                    and self._is_feasible()
                     and pulp.value(self.preference_objective) > undecided
                     and pulp.value(self.cost_objective) >= cost - budget - COST_BOUND_TOLERANCE):
                 return False
@@ -910,7 +917,7 @@ class Optimizer:
         # feasible solution, including one it stopped on at the time limit. Measured on a captured
         # request, a 2 s run and a 30 s run both said Optimal, with objectives of -682466848 and
         # 59714881. Only LpSolutionOptimal means proven, which is what the probe is asking.
-        if probe != 0 and self.problem.sol_status == pulp.LpSolutionOptimal:
+        if probe != 0 and self.problem.sol_status == pulp.LpSolutionOptimal and self._is_feasible():
             self.solve_path = 'joint'
             self.cost_stage_value = pulp.value(self.cost_objective)
             self.preference_stage = 'not needed'
@@ -926,7 +933,8 @@ class Optimizer:
         # between a schedule and no answer at all.
         fallback = ({var: var.varValue for var in self.problem.variables()}
                     if self.problem.sol_status in (pulp.LpSolutionOptimal,
-                                                   pulp.LpSolutionIntegerFeasible) else None)
+                                                   pulp.LpSolutionIntegerFeasible)
+                    and self._is_feasible() else None)
 
         gap_abs = self.settings.gap_abs
         scale = self.objective_scale
@@ -940,7 +948,7 @@ class Optimizer:
             self.problem.solve(self._solver(tmpdir, timeLimit=remaining,
                                             gapAbs=None if gap_abs is None else gap_abs * scale))
 
-        if pulp.LpStatus[self.problem.status] == 'Optimal':
+        if pulp.LpStatus[self.problem.status] == 'Optimal' and self._is_feasible():
             # the cost stage is allowed to stop on its gap, so LpSolutionOptimal is not required of
             # it, only that it produced something to break ties over
             self.cost_stage_value = pulp.value(self.cost_objective)
@@ -950,6 +958,20 @@ class Optimizer:
             for var, value in fallback.items():
                 var.varValue = value
             self.problem.status = pulp.LpStatusOptimal
+        elif pulp.LpStatus[self.problem.status] == 'Optimal':
+            # a status with no schedule behind it, see _is_feasible
+            self.problem.status = pulp.LpStatusNotSolved
+
+    def _is_feasible(self) -> bool:
+        """Whether the current values hold every bound and row of the model.
+
+        CBC's solution file is not always the schedule its log describes. Stopped by the clock
+        inside the root heuristics it reports Optimal, within gap tolerance, with the best objective
+        it found, and writes a column vector that breaks the balance rows by whole charging steps,
+        flagged ** in the file. pulp drops the flags and reads it like any other solution, so
+        neither status nor sol_status can tell it from a real one. Costs two milliseconds.
+        """
+        return self.problem.valid(FEASIBILITY_TOLERANCE)
 
     def _is_integral(self) -> bool:
         """Whether every integer variable of the current solution came back on a whole number.
@@ -994,11 +1016,11 @@ class Optimizer:
             status = 'Feasible'
 
         # last line of defence. Every stage above decides for itself whether to keep what came
-        # back, so nothing should reach this point off the integers, but a schedule that breaks
-        # the model is worse than no schedule: it looks like an answer, and the caller charges a
-        # battery by it. One pass over the binaries against a solve measured in seconds.
-        if status in ('Optimal', 'Feasible') and not self._is_integral():
-            print("solver returned a fractional solution, reporting no schedule")
+        # back, so nothing should reach this point off the integers or off the rows, but a schedule
+        # that breaks the model is worse than no schedule: it looks like an answer, and the caller
+        # charges a battery by it. One pass over the model against a solve measured in seconds.
+        if status in ('Optimal', 'Feasible') and not (self._is_integral() and self._is_feasible()):
+            print("solver returned a schedule that breaks the model, reporting no schedule")
             status = 'Not Solved'
 
         # grid import and export if no demand rate is active

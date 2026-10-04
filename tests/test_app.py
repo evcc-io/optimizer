@@ -143,13 +143,14 @@ def test_every_request_logs_a_solve_line(capsys):
     # so renaming one breaks production attribution silently
     request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
     client = app.test_client()
-    client.post("/optimize/charge-schedule", json=request)
+    client.post("/optimize/charge-schedule", json=request, headers={"User-Agent": "evcc/0.311.1"})
 
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()
              if line.startswith('{"solve"')]
     assert len(lines) == 1, "every request logs exactly one solve line"
     solve = lines[0]["solve"]
-    assert {"elapsed", "stages", "path", "preferences", "status", "steps"} <= set(solve)
+    assert {"client", "elapsed", "stages", "path", "preferences", "status", "steps"} <= set(solve)
+    assert solve["client"] == "evcc/0.311.1"
     assert solve["elapsed"] > 0
     assert solve["stages"] and set(solve["stages"]) <= {"build", "probe", "cost", "tie_break"}
     assert solve["steps"] == len(request["time_series"]["dt"])
