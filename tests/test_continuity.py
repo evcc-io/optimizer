@@ -6,7 +6,7 @@ import numpy as np
 import pulp
 import pytest
 
-from optimizer.optimizer import CONTINUITY_TIME_LIMIT, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
+from optimizer.optimizer import CONTINUITY_SPLIT_TIME_LIMIT, CONTINUITY_TIME_LIMIT, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
 
 
 def build(strategy: str = 'none') -> Optimizer:
@@ -83,6 +83,18 @@ def test_continuity_is_gated_by_the_clock_of_the_stage_it_extends(
     assert starts(result['batteries'][0]['charging_power']) == expected_starts
     assert model.continuity_stage.startswith(expected_stage)
     assert ('continuity' in model.stage_seconds) == expected_stage.startswith('improved')
+
+
+@pytest.mark.parametrize('path, cap', [('joint', CONTINUITY_TIME_LIMIT), ('split', CONTINUITY_SPLIT_TIME_LIMIT)])
+def test_split_gets_the_longer_continuity_clock(path: str, cap: float):
+    # the joint path is most of the traffic, the split has paid for a probe that proved nothing
+    # and has clock left; both stay inside the deadline
+    model = build()
+    model.solve_path = path
+    model.stage_seconds = {'probe': 0.5, 'cost': 0.5}
+
+    assert model._continuity_clock(None) == cap
+    assert model._continuity_clock(time.monotonic() + 0.5) == pytest.approx(0.5, abs=0.05)
 
 
 @pytest.mark.parametrize('schedule', [(0, 500, 0, 500, 0, 500), (0, 500, 500, 500, 0, 0)])
