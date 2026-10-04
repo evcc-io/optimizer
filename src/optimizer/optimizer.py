@@ -207,6 +207,7 @@ class BatteryConfig:
     s_goal: Optional[List[float]] = None  # Goal state of charge (Wh)
     c_priority: int = 0
     c_active: bool = False  # Whether the device is charging at the start of the horizon
+    p_departure: Optional[List[float]] = None  # Probability the device leaves during each step
 
 
 @dataclass
@@ -313,6 +314,18 @@ class Optimizer:
 
         # grid sides leveled by the active peak attenuation strategy, empty for all other strategies
         self.peak_sides = PEAK_STRATEGY_SIDES.get(strategy.charging_strategy, ())
+
+    def _soc_value_weights(self, bat: BatteryConfig) -> np.ndarray:
+        """
+        Probability that s[t] is the state the battery is left in, which p_a then values. Without
+        departure probabilities that is the last step alone.
+        """
+        weights = np.zeros(self.T)
+        if bat.p_departure is not None:
+            weights[:] = bat.p_departure
+        if self.T:
+            weights[-1] += 1 - weights.sum()
+        return weights
 
     def create_model(self):
         """
@@ -470,9 +483,11 @@ class Optimizer:
         for t in self.time_steps:
             objective += self.variables['e'][t] * self.time_series.p_E[t]
 
-        # Final state of charge value [currency unit]
+        # Value of the state of charge the battery is left in [currency unit]
         for i, bat in enumerate(self.batteries):
-            objective += self.variables['s'][i][-1] * bat.p_a
+            for t, weight in enumerate(self._soc_value_weights(bat)):
+                if weight:
+                    objective += self.variables['s'][i][t] * weight * bat.p_a
 
         # charge for import power demand rate. The demand rate is applied to the maximum
         # power draw beyond the threshold within the time horizon.
@@ -1299,8 +1314,9 @@ class Optimizer:
         # bat.s_initial and not s[0]: s[0] is the state after the first time step and already
         # carries that step's charging, so subtracting it dropped the first step from the result.
         for i, bat in enumerate(self.batteries):
-            clean_objective += (pulp.value(self.variables['s'][i][self.T-1])
-                                - bat.s_initial) * bat.p_a
+            for t, weight in enumerate(self._soc_value_weights(bat)):
+                if weight:
+                    clean_objective += (pulp.value(self.variables['s'][i][t]) - bat.s_initial) * weight * bat.p_a
 
         # charge for import power demand rate. The demand rate is applied to the maximum
         # power draw beyond the threshold within the time horizon.
