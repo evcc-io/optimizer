@@ -50,6 +50,23 @@ The maximum is a single value out of the horizon, which leaves one gap: a load s
 
 One request is up to five solver runs under one wall clock, `OPTIMIZER_TIME_LIMIT` (10 s in production). Each stage keeps what the previous one found unless it can improve on it without spending money. The request log carries where the clock went (`stages`), which path was taken (`path`), what the tie break (`preferences`) and the continuity pass (`continuity`) did, and what the cost stage found (`cost_stage_value`) against what it could not rule out (`cost_stage_gap`, currency, zero when proven).
 
+```mermaid
+flowchart TD
+    build["build<br/>MILP, objective scaled"] --> probe{"probe<br/>cost and preferences in one solve, PROBE_SHARE of the limit"}
+    probe -- "proven optimal" --> joint["path joint"]
+    probe -- "not proven" --> cost{"cost<br/>money only, stopped on OPTIMIZER_GAP_ABS, at most COST_TIME_LIMIT"}
+    cost -- "usable schedule" --> lp["tie_break LP<br/>binaries pinned, slack ladder if CBC calls the bound infeasible"]
+    cost -- "no usable schedule" --> kept["path split, kept the probe"]
+    lp --> milp["tie_break MILP<br/>clock permitting, at most MILP_PREFERENCE_TIME_LIMIT"]
+    gate{"continuity gate<br/>a battery has more than one session, and the probe or the cost stage took at most CONTINUITY_TIME_LIMIT"}
+    joint --> gate
+    milp --> gate
+    kept --> gate
+    gate -- "joint: cap CONTINUITY_TIME_LIMIT<br/>split: cap CONTINUITY_SPLIT_TIME_LIMIT" --> continuity["continuity<br/>fewest charge starts under the cost, preference and peak bounds"]
+    gate -- "not needed, or skipped" --> result
+    continuity --> result["result<br/>Optimal, Feasible or Not Solved"]
+```
+
 | Stage | Task | Runs when | Parameters |
 |---|---|---|---|
 | `build` | Build the MILP and scale its objective so the largest coefficient sits at `OBJECTIVE_TARGET`. | Always. | `OBJECTIVE_TARGET` 1e6 |
@@ -57,9 +74,9 @@ One request is up to five solver runs under one wall clock, `OPTIMIZER_TIME_LIMI
 | `cost` | Money only, stopped on an absolute gap. Holds back a slice of the clock for the tie break instead of taking whatever is left. | The probe did not prove its answer: path `split`. | `OPTIMIZER_GAP_ABS` 0.01 currency, `COST_TIME_LIMIT` 3 s, `PREFERENCE_TIME_SHARE` 0.25 of the limit reserved |
 | `tie_break`, LP | Pin the binaries the cost stage chose and move only the continuous variables, under a bound that keeps the cost found. Milliseconds, so it runs whatever the clock says. If CBC calls the bound infeasible the slack is widened tenfold per retry. | Path `split` and a strategy is configured. | `OPTIMIZER_PREFERENCE_BUDGET` 0, `COST_BOUND_SLACK` 1e-5 up to `COST_BOUND_SLACK_CEILING` 1e-2, `COST_BOUND_TOLERANCE` 1e-4, `LP_PREFERENCE_TIME_LIMIT` 1 s |
 | `tie_break`, MILP | Search the whole model under the same bound to beat the LP. Whichever is ahead is returned. | After the LP, clock permitting. | The reserved slice, capped at `MILP_PREFERENCE_TIME_LIMIT` 2.5 s; uncapped without a time limit |
-| `continuity` | Fewest charge starts for batteries with `c_min > 0`, bounded by the cost, the preference value and each levelled grid peak already reached. A preference, not a guarantee: prices, charge demands and grid shaping still win, and power may vary within a session. | A battery has more than one charging session, and the solve so far took less than the stage may spend. | `CONTINUITY_TIME_LIMIT` 1 s on the joint path, `CONTINUITY_SPLIT_TIME_LIMIT` 2.5 s on a split, both bounded by the deadline, `CONTINUITY_TOLERANCE` 1e-5 |
+| `continuity` | Fewest charge starts for batteries with `c_min > 0`, bounded by the cost, the preference value and each levelled grid peak already reached. A preference, not a guarantee: prices, charge demands and grid shaping still win, and power may vary within a session. A device reported as charging (`c_active`) enters the horizon switched on, so keeping it on costs no start. | A battery has more than one charging session, and the solve the candidate extends took at most `CONTINUITY_TIME_LIMIT`: the probe on path `joint`, the cost stage on path `split`. | `CONTINUITY_TIME_LIMIT` 1 s, also the cap on path `joint`; `CONTINUITY_SPLIT_TIME_LIMIT` 2.5 s, the cap on path `split`; both bounded by the deadline; `CONTINUITY_TOLERANCE` 1e-5 |
 
-A schedule the solver stopped on at the limit is reported as `Feasible` rather than `Optimal`. A solve that comes back off the integers is refused and reported as `Not Solved`.
+A schedule the solver stopped on at the limit is reported as `Feasible` rather than `Optimal`. A solve that comes back off the integers or off the model's rows is refused and reported as `Not Solved`, whatever status CBC gave it.
 
 ## API
 
