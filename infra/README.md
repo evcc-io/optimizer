@@ -26,10 +26,12 @@ One Bicep template, `main.bicep`, deployed by `.github/workflows/deploy.yml`.
 
 1. Add the repository secret `VM_SSH_PUBLIC_KEY` (any ed25519 public key; day to day access
    is `az vm run-command`, the key is a break-glass).
-   The deploy service principal holds Contributor on the resource group, which cannot create
-   the role assignment for `optimizer-vm-id`. Grant it *Role Based Access Control
-   Administrator* on `kv-optimizer-prod` once (an Owner does this in the portal), or create
-   the Secrets Officer assignment for the identity by hand after the first, failing, deploy.
+   The deploy service principal holds Contributor on the resource group and cannot write
+   role assignments, so the identity and its Key Vault role are created once by an Owner and
+   only adopted by Bicep:
+   `az identity create -g rg-optimizer-prod -n optimizer-vm-id -l germanywestcentral` and
+   `az role assignment create --role "Key Vault Secrets Officer" --assignee-object-id <principalId> --assignee-principal-type ServicePrincipal --scope <kv-optimizer-prod id>`.
+   Done 2026-10-04.
 2. Run Deploy. DNS still points at Container Apps, nothing changes for clients. Check the floor:
    `curl -k --resolve optimizer.evcc.io:443:<lb ip> https://optimizer.evcc.io/` (self-signed).
 3. Point the `optimizer.evcc.io` A record at the load balancer IP (Bicep output `lbIp`).

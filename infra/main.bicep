@@ -253,20 +253,13 @@ var linuxConfiguration = {
   }
 }
 
-// one identity for every floor VM: read jwt-token-secret, write the shared TLS certificate
+// one identity for every floor VM: read jwt-token-secret, write the shared TLS certificate.
+// Its Key Vault Secrets Officer assignment is not declared here: the deploy service principal
+// is a Contributor and cannot write role assignments, so an Owner created it once by hand
+// (infra/README.md).
 resource vmIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: 'optimizer-vm-id'
   location: location
-}
-
-resource vmKeyVaultSecretsOfficer 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(keyVault.id, vmIdentity.id, 'Key Vault Secrets Officer')
-  scope: keyVault
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')
-    principalId: vmIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
-  }
 }
 
 resource vmNsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
@@ -449,7 +442,6 @@ resource vm0 'Microsoft.Compute/virtualMachines@2024-07-01' = {
       networkInterfaces: [{ id: vm0Nic.id }]
     }
   }
-  dependsOn: [vmKeyVaultSecretsOfficer]
 }
 
 // Spot capacity: evicted instances are deallocated and restored by the platform when capacity
@@ -511,7 +503,7 @@ resource spot 'Microsoft.Compute/virtualMachineScaleSets@2024-07-01' = {
       }
     }
   }
-  dependsOn: [lb, vmKeyVaultSecretsOfficer]
+  dependsOn: [lb]
 }
 
 output fqdn string = containerApp.properties.configuration.ingress.fqdn
