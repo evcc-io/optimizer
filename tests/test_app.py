@@ -32,9 +32,13 @@ def test_optimizer(test_case: pathlib.Path):
         # check objective value
         actual_objective_value = response.json["objective_value"]
         expected_objective_value = expected_response.get("objective_value", {})
+        # atol is a hundredth of a cent. The tie break stage gives away that much of the cost
+        # optimum to stay feasible against the solver's own rounding, see COST_BOUND_SLACK and
+        # COST_BOUND_TOLERANCE, and a case whose value is small in currency, 023 reports 0.58,
+        # would otherwise flap on a difference three orders below anything economically meaningful.
         assert numpy.isclose(actual_objective_value,
                              expected_objective_value,
-                             rtol=1e-05, atol=1e-08, equal_nan=False), \
+                             rtol=1e-05, atol=1e-04, equal_nan=False), \
             f"objective value: {actual_objective_value}, expected was: {expected_objective_value}"
     # cases marked strict also compare the schedule itself. needed where the feature under
     # test only picks between cost neutral alternatives, which the objective value hides
@@ -132,6 +136,24 @@ def test_slow_requests_are_dumped(tmp_path, monkeypatch):
     assert len(lines) == 2, "every slow request appends one line"
     assert json.loads(lines[0])["request"] == request
     assert json.loads(lines[1])["elapsed"] > 0
+
+
+def test_every_request_logs_a_solve_line(capsys):
+    # the key names are the Log Analytics contract: the dashboard's KQL queries parse this line,
+    # so renaming one breaks production attribution silently
+    request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
+    client = app.test_client()
+    client.post("/optimize/charge-schedule", json=request, headers={"User-Agent": "evcc/0.311.1"})
+
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+             if line.startswith('{"solve"')]
+    assert len(lines) == 1, "every request logs exactly one solve line"
+    solve = lines[0]["solve"]
+    assert {"client", "elapsed", "stages", "path", "preferences", "status", "steps"} <= set(solve)
+    assert solve["client"] == "evcc/0.311.1"
+    assert solve["elapsed"] > 0
+    assert solve["stages"] and set(solve["stages"]) <= {"build", "probe", "cost", "tie_break"}
+    assert solve["steps"] == len(request["time_series"]["dt"])
 
 
 def test_abort_returns_json_message():

@@ -47,6 +47,12 @@ const (
 
 // BatteryConfig defines model for BatteryConfig.
 type BatteryConfig struct {
+	// CActive Whether the device is charging at the start of the time horizon.
+	//   - True: the device enters the horizon switched on, so keeping it on costs no charge
+	//     start and interrupting it costs one.
+	//   - False: (default) the device is idle and any charging starts a new session.
+	CActive bool `json:"c_active,omitempty"`
+
 	// CMax Maximum charge power in W
 	CMax float32 `json:"c_max"`
 

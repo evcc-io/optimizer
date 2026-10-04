@@ -2,7 +2,6 @@ import json
 import pathlib
 
 import numpy
-import pulp
 import pytest
 
 from optimizer import optimizer as opt
@@ -51,13 +50,20 @@ def build(request, charging):
 
 
 def solve_at(request, charging, scale):
-    """Solve at a fixed OBJECTIVE_SCALE, or at the derived one for None, in the original unit."""
+    """Solve at a fixed scale, or the derived one for None, and return the cost stage's money."""
     original = opt.OBJECTIVE_SCALE
     opt.OBJECTIVE_SCALE = scale
     try:
         model = build(request, charging)
+        # solved to proven optimality on both sides. The absolute gap lets either run stop up to a
+        # cent short, three orders above the difference this compares, so with it on the assert
+        # would measure where the search happened to stop rather than what scaling did.
+        model.settings.gap_abs = None
         assert model.solve()['status'] == 'Optimal'
-        return pulp.value(model.problem.objective) / model.objective_scale
+        # the cost stage is what the scaling applies to, read before the preference stage spends
+        # its slack. The preference stage derives a factor for its own objective, so a comparison
+        # of the total would measure that mechanism instead of this one.
+        return model.cost_stage_value
     finally:
         opt.OBJECTIVE_SCALE = original
 
