@@ -74,16 +74,29 @@ api = Api(app, version='1.0', title='EV Charging Optimization API',
 
 @api.errorhandler(BadRequest)
 def handle_validation_error(error):
-    """Rename 'errors' to 'details' in validation responses."""
-    if error.data and 'errors' in error.data:
-        error.data['details'] = error.data['errors']
-        del error.data['errors']
-        return error.data, 400
-    elif error.data:
-        # plain api.abort(400, message) calls carry only a message
-        return error.data, 400
-    else:
-        raise error
+    """Return JSON and log the cause without logging rejected request values."""
+    data = getattr(error, 'data', None)
+    reason = data.get('message', error.description).partition(':')[0] if data else 'Invalid request body'
+    error.data = data or {'message': error.description}
+    if 'errors' in error.data:
+        error.data['details'] = error.data.pop('errors')
+
+    logged = {
+        'path': request.path,
+        # evcc stamps its version on every request as evcc/<version>. A rejected request is
+        # usually a client bug, and the version is what says which release carries it.
+        'client': request.headers.get('User-Agent'),
+        'reason': reason,
+        'fields': sorted(error.data.get('details', {})),
+        'validator': getattr(error.__context__, 'validator', None),
+    }
+    # series lengths are shape, not content: they say which series the client cut short, which
+    # is what a length mismatch needs traced to. Production logs a steady eight to twelve of
+    # them an hour with no way to tell gt from p_N.
+    if 'lengths' in error.data:
+        logged['lengths'] = error.data['lengths']
+    print(json.dumps({'bad_request': logged}), flush=True)
+    return error.data, 400
 
 
 # Namespace for the API
@@ -218,23 +231,21 @@ class OptimizeCharging(Resource):
                 p_E=data['time_series']['p_E'],
             )
 
-            # Validate time series lengths
-            lengths = [len(time_series.gt), len(time_series.ft),
-                       len(time_series.p_N), len(time_series.p_E)]
+            # Validate time series lengths. dt included: the model indexes every series by it,
+            # so a short dt was an IndexError and a 500 rather than a 400 naming the series.
+            lengths = {
+                'dt': len(time_series.dt), 'gt': len(time_series.gt), 'ft': len(time_series.ft),
+                'p_N': len(time_series.p_N), 'p_E': len(time_series.p_E),
+                'p_demand': [len(bat.p_demand) for bat in batteries if bat.p_demand is not None],
+                's_goal': [len(bat.s_goal) for bat in batteries if bat.s_goal is not None],
+            }
 
-            # Validate p_demand if provided
-            for bat in batteries:
-                if bat.p_demand is not None:
-                    lengths.append(len(bat.p_demand))
+            if len({*[v for k, v in lengths.items() if k not in ('p_demand', 's_goal')],
+                    *lengths['p_demand'], *lengths['s_goal']}) > 1:
+                api.abort(400, "All time series must have the same length", lengths=lengths)
 
-            # Validate s_goal if provided
-            for bat in batteries:
-                if bat.s_goal is not None:
-                    lengths.append(len(bat.s_goal))
-
-            if len(set(lengths)) > 1:
-                api.abort(400, "All time series must have the same length")
-
+        except BadRequest:
+            raise
         except Exception as e:
             api.abort(400, f"Invalid data format: {str(e)}")
 
