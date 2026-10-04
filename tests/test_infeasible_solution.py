@@ -1,3 +1,5 @@
+import dataclasses
+
 import pulp
 import pytest
 from test_objective_split import build
@@ -24,8 +26,7 @@ def test_a_solution_off_the_rows_is_reported_as_no_schedule(monkeypatch):
 
     def probe_then_split(tmpdir, deadline):
         break_a_row(optimizer)
-        optimizer.problem.status = pulp.LpStatusOptimal
-        optimizer.problem.sol_status = pulp.LpSolutionOptimal
+        optimizer.stats = pulp.LpSolveStats(status=pulp.LpSolveStatus.Optimal, has_solution=True)
 
     monkeypatch.setattr(optimizer, '_probe_then_split', probe_then_split)
     result = optimizer.solve()
@@ -47,13 +48,9 @@ def test_a_cost_stage_off_the_rows_falls_back_to_the_probe(monkeypatch):
     def solve(*args, **kwargs):
         calls.append(1)
         if len(calls) == 1:          # the probe, real, reported unproven so the split runs
-            real_solve(*args, **kwargs)
-            optimizer.problem.sol_status = pulp.LpSolutionIntegerFeasible
-            return optimizer.problem.status
+            return dataclasses.replace(real_solve(*args, **kwargs), status=pulp.LpSolveStatus.TimeLimit)
         break_a_row(optimizer)       # the cost stage, a solution file that is not the schedule
-        optimizer.problem.status = pulp.LpStatusOptimal
-        optimizer.problem.sol_status = pulp.LpSolutionIntegerFeasible
-        return optimizer.problem.status
+        return pulp.LpSolveStats(status=pulp.LpSolveStatus.TimeLimit, has_solution=True)
 
     monkeypatch.setattr(optimizer.problem, 'solve', solve)
     result = optimizer.solve()
@@ -80,9 +77,7 @@ def test_a_preference_stage_off_the_rows_is_not_kept(monkeypatch):
         if len(calls) == 1:          # the cost stage, left alone
             return real_solve(*args, **kwargs)
         break_a_row(optimizer)       # the preference stage, LP floor and MILP alike
-        optimizer.problem.status = pulp.LpStatusOptimal
-        optimizer.problem.sol_status = pulp.LpSolutionOptimal
-        return optimizer.problem.status
+        return pulp.LpSolveStats(status=pulp.LpSolveStatus.Optimal, has_solution=True)
 
     monkeypatch.setattr(optimizer.problem, 'solve', solve)
     result = optimizer.solve()

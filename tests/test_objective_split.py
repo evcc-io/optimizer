@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import pathlib
 import time
@@ -50,11 +51,33 @@ def build(case):
         eta_c=request.get('eta_c', 0.95), eta_d=request.get('eta_d', 0.95), M=1e6)
 
 
+def test_a_failed_probe_leaves_the_answer_to_the_split(monkeypatch):
+    optimizer = build(CASES[0])
+    optimizer.settings.time_limit = 10
+    optimizer.create_model()
+
+    solve = optimizer.problem.solve
+    calls = []
+
+    def failing_probe(solver, **kwargs):
+        calls.append(solver.timeLimit)
+        if len(calls) == 1:
+            raise pulp.PulpSolverError('Pulp: Error while trying to execute')
+        return solve(solver, **kwargs)
+
+    monkeypatch.setattr(optimizer.problem, 'solve', failing_probe)
+    optimizer.solve()
+
+    assert len(calls) > 1, 'the split did not run'
+    assert optimizer.stats.has_solution
+    assert optimizer.solve_path == 'split, probe failed', optimizer.solve_path
+
+
 def solve_cost_only(optimizer):
     """First stage on its own, solved to proven optimality."""
     optimizer.create_model()
     optimizer.problem.setObjective(optimizer.cost_objective * optimizer.objective_scale)
-    optimizer.problem.solve(pulp.PULP_CBC_CMD(msg=0))
+    optimizer.problem.solve(optimizer._solver('/tmp'))
     return optimizer
 
 
@@ -91,7 +114,7 @@ def test_the_lp_floor_relaxes_a_bound_cbc_reports_infeasible(monkeypatch):
         result = real_solve(self, solver)
         calls['n'] += 1
         if calls['n'] <= 2:
-            self.status = pulp.LpStatusInfeasible
+            return dataclasses.replace(result, status=pulp.LpSolveStatus.Infeasible)
         return result
 
     monkeypatch.setattr(pulp.LpProblem, 'solve', infeasible_twice)
@@ -145,7 +168,9 @@ def test_preference_stage_decides_the_tie(case):
     # what the second stage is for: the first stage is indifferent between the schedules it leaves
     # equally priced, so its preference value is whatever the search happened to stop on. Deciding
     # the tie afterwards has to be at least as good, and on these cases it is strictly better.
-    undecided = pulp.value(solve_cost_only(build(case)).preference_objective)
+    # kept in a name: an expression outlives its problem only as long as the problem is referenced
+    cost_only = solve_cost_only(build(case))
+    undecided = pulp.value(cost_only.preference_objective)
 
     decided = build(case)
     decided.settings.probe_seconds = 0
@@ -153,6 +178,17 @@ def test_preference_stage_decides_the_tie(case):
 
     assert pulp.value(decided.preference_objective) > undecided, \
         f'preferences after the tie break {pulp.value(decided.preference_objective)}, before {undecided}'
+
+
+def test_a_split_solve_runs_again_on_a_fresh_model():
+    # the cost bound the split adds cannot change once it is in the model, so solve() builds the
+    # model again rather than solving against the bound of the previous run
+    optimizer = build(CASES[0])
+    optimizer.settings.probe_seconds = 0
+    first = optimizer.solve()
+    again = optimizer.solve()
+    assert again['status'] == first['status'] == 'Optimal'
+    assert numpy.isclose(again['objective_value'], first['objective_value'])
 
 
 @pytest.mark.parametrize('case', CASES)
