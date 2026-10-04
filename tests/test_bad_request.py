@@ -99,6 +99,17 @@ def test_length_mismatch_names_the_series(payload, series, capsys):
     }
 
 
+def test_empty_time_series_is_rejected(payload):
+    # an empty horizon used to reach the model and come back as a 500 from np.min over no prices
+    for series in payload['time_series']:
+        payload['time_series'][series] = []
+
+    response = app.test_client().post('/optimize/charge-schedule', json=payload)
+
+    assert response.status_code == 400
+    assert response.json['message'] == 'Time series must not be empty'
+
+
 def test_client_version_is_logged(payload, capsys):
     payload['time_series']['p_N'] = [0.0003]
 
