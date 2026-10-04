@@ -260,6 +260,9 @@ class OptimizeCharging(Resource):
                     *lengths['p_demand'], *lengths['s_goal']}) > 1:
                 api.abort(400, "All time series must have the same length", lengths=lengths)
 
+            if lengths['dt'] == 0:
+                api.abort(400, "Time series must not be empty")
+
         except BadRequest:
             raise
         except Exception as e:
