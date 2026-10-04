@@ -19,18 +19,18 @@ Inspired by https://github.com/Akkudoktor-EOS/EOS/pull/462
 
 ## Example
 
-A real household as evcc's optimizer page shows it: an 8.2 kWh home battery, a full EV in the carport, a two day PV forecast, a flat 32.5 ct tariff, 224 steps of 15 minutes. Grid power is the line, PV forecast and household consumption the inputs, the bars are what the optimizer schedules for each battery.
+A real household over two days: an 8.2 kWh home battery, a full EV in the carport, a PV forecast, a flat 32.5 ct tariff, 224 steps of 15 minutes. Grid power is the line, PV forecast and household consumption the inputs, the bars are what the optimizer schedules for each battery.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/evcc-plan-dark.png">
-  <img alt="evcc optimizer page, charging plan: grid power, solar forecast, consumption and the home battery's charging schedule over two days" src="docs/img/evcc-plan-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-plan-dark.png">
+  <img alt="Charging plan: grid power, solar forecast, consumption and the home battery's charging schedule over two days" src="docs/img/example-plan-light.png">
 </picture>
 
 Nothing to buy: the home battery carries the house through the night and refills from the first PV surplus of the morning, because `charge_before_export` makes self-consumption the tie-breaker. It is full before noon and the rest of the day exports. The EV is at its goal and stays idle.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/evcc-soc-dark.png">
-  <img alt="evcc optimizer page, SoC projections: the EV flat at 100 percent, the home battery cycling between its overnight low and its charge limit" src="docs/img/evcc-soc-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-soc-dark.png">
+  <img alt="SoC projections: the EV flat at 100 percent, the home battery cycling between its overnight low and its charge limit" src="docs/img/example-soc-light.png">
 </picture>
 
 ## Levelling grid peaks
@@ -42,8 +42,8 @@ Cheapest is not always kindest to the grid connection. On a flat tariff nothing 
 The maximum is a single value out of the horizon, which leaves one gap: a load spike the schedule cannot touch, an oven, a heat pump defrost, fixes it, and the penalty then has nothing left to win below it. Charging flat out against the spike scores the same as spreading the same energy over the window, and the solver may pick either.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/evcc-peak-dark.png">
-  <img alt="evcc optimizer page with attenuate_grid_peaks: the battery refill spread over the solar window and the feed-in held to a flat plateau" src="docs/img/evcc-peak-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-peak-dark.png">
+  <img alt="Charging plan with attenuate_grid_peaks: the battery refill spread over the solar window and the feed-in held to a flat plateau" src="docs/img/example-peak-light.png">
 </picture>
 
 ## How a request is solved
