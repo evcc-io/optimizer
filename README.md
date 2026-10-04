@@ -19,31 +19,31 @@ Inspired by https://github.com/Akkudoktor-EOS/EOS/pull/462
 
 ## Example
 
-One day, hourly steps: a 10 kWh home battery, an EV that must reach 40 kWh by 08:00, a 4 kWp PV forecast, and a dynamic tariff between 18 and 44 ct/kWh.
+Two days in 15 minute steps: a 10 kWh home battery at 50 %, a 50 kWh EV at 20 % that must reach 80 % by 08:00 on a 3.7 kW single phase connection, a 4 kWp PV forecast, and a dynamic tariff between 18 ct at noon and 44 ct at 19:00. Grid power is the line, PV forecast and household consumption the inputs, the bars are what the optimizer schedules for each battery.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-input-dark.svg">
-  <img alt="Household demand, PV forecast and dynamic import tariff over 24 hours" src="docs/img/example-input-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-plan-dark.png">
+  <img alt="Charging plan: the EV charges through the night at 3.7 kW, PV surplus goes into the EV and then the home battery, the battery covers the evening peak" src="docs/img/example-plan-light.png">
 </picture>
 
-The optimizer buys all 29 kWh of grid energy in the three cheapest hours of the night, filling the EV to its goal by 04:00 — four hours early, because energy later is more expensive. Midday PV surplus goes into the home battery instead of the grid, since `charge_before_export` makes self-consumption the tie-breaker. The 44 ct evening peak is then covered entirely from storage: after 04:00 the house imports nothing at all.
+The EV takes its 30 kWh in the eight cheapest hours before the deadline, from 22:00 to 06:00 at full power, and stops exactly at the goal. The morning PV surplus then goes into the EV and after noon into the home battery rather than to the grid, because `charge_before_export` makes self-consumption the tie-breaker. From there the battery covers the 44 ct evening peak and the night, and the house imports nothing until the next PV surplus arrives.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-result-dark.svg">
-  <img alt="Optimized grid exchange, battery power and state of charge over 24 hours" src="docs/img/example-result-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-soc-dark.png">
+  <img alt="SoC projections: the EV climbing from 20 to 80 percent overnight and to full on PV, the home battery cycling between its overnight low and full" src="docs/img/example-soc-light.png">
 </picture>
 
 ## Levelling grid peaks
 
-Cheapest is not always kindest to the grid connection. The same house on a *flat* tariff — where nothing but the strategy decides when to charge — takes its 29 kWh at the full 11 kW in the last two hours before the EV deadline, and pushes the midday surplus out in two short bursts.
+Cheapest is not always kindest to the grid connection. Above, the home battery fills in one block after noon and the rest of the midday surplus leaves as a 3 kW feed-in peak.
 
-`attenuate_grid_peaks` penalizes the highest grid power over the horizon, on the import and the feed-in side. The same energy then arrives as a flat 3.6 kW plateau, and the feed-in peak drops from 1.3 kW to 0.25 kW. Nothing costs more — the connection just sees a calmer profile. `attenuate_demand_peaks` and `attenuate_feedin_peaks` do the same for one side only.
+`attenuate_grid_peaks` penalizes the highest grid power over the horizon, on the import and the feed-in side. The same household then spreads the battery refill over the whole solar window and holds the feed-in to a flat 1 kW plateau. The night import stays where it is: the EV needs its eight hours at 3.7 kW either way. Nothing costs more, the connection just sees a calmer profile. `attenuate_demand_peaks` and `attenuate_feedin_peaks` do the same for one side only.
 
-The maximum is a single value out of the horizon, which leaves one gap: a load spike the schedule cannot touch — an oven, a heat pump defrost — fixes it, and the penalty then has nothing left to win below it. Charging flat out against the spike scores the same as spreading the same energy over the window, and the solver may pick either.
+The maximum is a single value out of the horizon, which leaves one gap: a load spike the schedule cannot touch, an oven, a heat pump defrost, fixes it, and the penalty then has nothing left to win below it. Charging flat out against the spike scores the same as spreading the same energy over the window, and the solver may pick either.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-peak-dark.svg">
-  <img alt="Grid exchange over 24 hours without a strategy and with attenuate_grid_peaks, showing the import peak dropping from 11.5 kW to 3.6 kW" src="docs/img/example-peak-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-peak-dark.png">
+  <img alt="Charging plan with attenuate_grid_peaks: the battery refill spread over the solar window and the feed-in held to a flat 1 kW plateau" src="docs/img/example-peak-light.png">
 </picture>
 
 ## How a request is solved
