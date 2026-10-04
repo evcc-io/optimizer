@@ -153,6 +153,8 @@ time_series_model = api.model('TimeSeries', {
     'ft': fields.List(fields.Float, required=True, description='Forecasted solar generation at each time step (Wh)'),
     'p_N': fields.List(fields.Float, required=True, description='Price per Wh taken from grid at each time step'),
     'p_E': fields.List(fields.Float, required=True, description='Remuneration per Wh fed into grid at each time step'),
+    'ft_err': fields.List(fields.Float, required=False,
+                          description='Standard deviation of the solar forecast at each time step (Wh). Grid cost is taken as the mean over ft +- ft_err.'),
 })
 
 optimization_input_model = api.model('OptimizationInput', {
@@ -245,6 +247,7 @@ class OptimizeCharging(Resource):
                 ft=data['time_series']['ft'],
                 p_N=data['time_series']['p_N'],
                 p_E=data['time_series']['p_E'],
+                ft_err=data['time_series'].get('ft_err'),
             )
 
             # Validate time series lengths. dt included: the model indexes every series by it,
@@ -255,6 +258,8 @@ class OptimizeCharging(Resource):
                 'p_demand': [len(bat.p_demand) for bat in batteries if bat.p_demand is not None],
                 's_goal': [len(bat.s_goal) for bat in batteries if bat.s_goal is not None],
             }
+            if time_series.ft_err is not None:
+                lengths['ft_err'] = len(time_series.ft_err)
 
             if len({*[v for k, v in lengths.items() if k not in ('p_demand', 's_goal')],
                     *lengths['p_demand'], *lengths['s_goal']}) > 1:

@@ -216,6 +216,7 @@ class TimeSeriesData:
     ft: List[float]  # Forecasted production [Wh]
     p_N: List[float]  # Import prices [currency unit/Wh]
     p_E: List[float]  # Export prices [currency unit/Wh]
+    ft_err: Optional[List[float]] = None  # Standard deviation of the production forecast [Wh]
 
 
 class Optimizer:
@@ -314,6 +315,34 @@ class Optimizer:
         # grid sides leveled by the active peak attenuation strategy, empty for all other strategies
         self.peak_sides = PEAK_STRATEGY_SIDES.get(strategy.charging_strategy, ())
 
+        # steps whose grid cost is taken as the mean over the forecast band ft +- ft_err instead of
+        # at ft. Skipped where export pays more than import: the band's import and export are not
+        # locked against each other by a direction binary, so there the pair could pocket the
+        # difference on paper.
+        self.band_steps = set()
+        if time_series.ft_err is not None:
+            self.band_steps = {t for t in self.time_steps
+                               if time_series.ft_err[t] > 0 and time_series.p_N[t] >= time_series.p_E[t]}
+
+    def _grid_value(self, value=lambda var: var):
+        """
+        Export revenue less import cost over the horizon. value maps a variable to what enters the
+        sum: the variable itself for the objective, pulp.value for the result. Import beyond
+        p_max_imp is priced like the rest, the limit itself is enforced by its penalty.
+        """
+        total = 0
+        for t in self.time_steps:
+            p_N, p_E = self.time_series.p_N[t], self.time_series.p_E[t]
+            if t in self.band_steps:
+                total += sum(0.5 * (value(self.variables[f'e_{k}'][t]) * p_E - value(self.variables[f'n_{k}'][t]) * p_N)
+                             for k in ('lo', 'hi'))
+                continue
+            e_imp = value(self.variables['n'][t])
+            if self.grid.p_max_imp is not None:
+                e_imp += value(self.variables['e_imp_lim_exc'][t])
+            total += value(self.variables['e'][t]) * p_E - e_imp * p_N
+        return total
+
     def create_model(self):
         """
         Create and initialize the MILP model
@@ -387,6 +416,11 @@ class Optimizer:
         self.variables['n'] = [pulp.LpVariable(f"n_{t}", lowBound=0) for t in self.time_steps]
         self.variables['e'] = [pulp.LpVariable(f"e_{t}", lowBound=0) for t in self.time_steps]
 
+        # grid import/export with the production one ft_err below (lo) and above (hi) the forecast [Wh]
+        for k in ('lo', 'hi'):
+            self.variables[f'n_{k}'] = {t: pulp.LpVariable(f"n_{k}_{t}", lowBound=0) for t in self.band_steps}
+            self.variables[f'e_{k}'] = {t: pulp.LpVariable(f"e_{k}_{t}", lowBound=0) for t in self.band_steps}
+
         # penalty variables for exceeding grid power limits (W)
         # for grid import
         if self.grid.p_max_imp is not None:
@@ -449,26 +483,8 @@ class Optimizer:
         ############################################################################
         # actual cost & benefit elements
 
-        # Grid import cost (negative because we want to minimize cost) [currency unit]
-        for t in self.time_steps:
-            # if a demand rate beyond p_max_imp is applied, both portions have to be considered
-            # for energy cost. If only an import limit is given, there should never be power
-            # import beyond p_max_imp, however, if the limit gets violated, we account for
-            # the energy cost as well to stay consistent.
-            if self.grid.p_max_imp is not None:
-                objective -= (
-                    # grid import up to the demand rate threshold
-                    self.variables['n'][t]
-                    # import beyond the threshold
-                    + self.variables['e_imp_lim_exc'][t]
-                ) * self.time_series.p_N[t]
-            else:
-                # standard case
-                objective -= self.variables['n'][t] * self.time_series.p_N[t]
-
-        # Grid export revenue [currency unit]
-        for t in self.time_steps:
-            objective += self.variables['e'][t] * self.time_series.p_E[t]
+        # Grid export revenue less import cost [currency unit]
+        objective += self._grid_value()
 
         # Final state of charge value [currency unit]
         for i, bat in enumerate(self.batteries):
@@ -602,6 +618,16 @@ class Optimizer:
                              + e_grid_imp
                              == e_grid_exp
                              + self.time_series.gt[t])
+
+            # the same balance with the production off by ft_err either way. The schedule stays,
+            # the deviation lands on the grid: a shortfall cannot raise the export, a surplus
+            # cannot raise the import.
+            if t in self.band_steps:
+                err = self.time_series.ft_err[t]
+                self.problem += self.variables['n_lo'][t] - self.variables['e_lo'][t] == e_grid_imp - e_grid_exp + err
+                self.problem += self.variables['n_hi'][t] - self.variables['e_hi'][t] == e_grid_imp - e_grid_exp - err
+                self.problem += self.variables['e_lo'][t] <= e_grid_exp
+                self.problem += self.variables['n_hi'][t] <= e_grid_imp
 
         # Constraints (4)-(5): Grid flow direction. Export/import have natural
         # per-step caps (export: solar plus discharge-to-grid capacity; import:
@@ -1277,23 +1303,8 @@ class Optimizer:
         '''
         recalculate the objective value without penalties and strategy icentives
         '''
-        clean_objective = 0
-        # Grid import cost (negative because we want to minimize cost) [currency unit]
-        for t in self.time_steps:
-            if self.grid.p_max_imp is not None:
-                clean_objective -= (
-                    # grid import up to the demand rate threshold
-                    pulp.value(self.variables['n'][t])
-                    # import beyond the threshold
-                    + pulp.value(self.variables['e_imp_lim_exc'][t])
-                ) * self.time_series.p_N[t]
-            else:
-                # standard case
-                clean_objective -= pulp.value(self.variables['n'][t]) * self.time_series.p_N[t]
-
-        # Grid export revenue [currency unit]
-        for t in self.time_steps:
-            clean_objective += pulp.value(self.variables['e'][t]) * self.time_series.p_E[t]
+        # Grid export revenue less import cost [currency unit]
+        clean_objective = self._grid_value(pulp.value)
 
         # Value of the energy the horizon added to the batteries [currency unit]. The reference is
         # bat.s_initial and not s[0]: s[0] is the state after the first time step and already
