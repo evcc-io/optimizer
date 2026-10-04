@@ -42,7 +42,7 @@ def build(case):
             discharge_to_grid=bat.get('discharge_to_grid', False),
             s_capacity=bat.get('s_capacity', bat['s_max']),
             s_min=bat['s_min'], s_max=bat['s_max'], s_initial=bat['s_initial'],
-            p_demand=bat.get('p_demand'), s_goal=bat.get('s_goal'),
+            p_demand=bat.get('p_demand'), d_demand=bat.get('d_demand'), s_goal=bat.get('s_goal'),
             c_min=bat['c_min'], c_max=bat['c_max'], d_max=bat['d_max'], p_a=bat['p_a'],
             c_priority=bat.get('c_priority', 0)) for bat in request['batteries']],
         time_series=TimeSeriesData(dt=series['dt'], gt=series['gt'], ft=series['ft'],

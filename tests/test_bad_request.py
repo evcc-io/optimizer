@@ -86,7 +86,7 @@ def test_length_mismatch_names_the_series(payload, series, capsys):
     response = app.test_client().post('/optimize/charge-schedule', json=payload)
 
     assert response.status_code == 400
-    lengths = {'dt': 2, 'gt': 2, 'ft': 2, 'p_N': 2, 'p_E': 2, 'p_demand': [], 's_goal': [2]}
+    lengths = {'dt': 2, 'gt': 2, 'ft': 2, 'p_N': 2, 'p_E': 2, 'p_demand': [], 'd_demand': [], 's_goal': [2]}
     lengths[series] = 1
     assert response.json == {'message': 'All time series must have the same length', 'lengths': lengths}
     assert json.loads(capsys.readouterr().out)['bad_request'] == {

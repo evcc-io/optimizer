@@ -124,6 +124,7 @@ battery_config_model = api.model('BatteryConfig', {
     's_max': fields.Float(required=True, description='Maximum state of charge (Wh)'),
     's_initial': fields.Float(required=True, description='Initial state of charge (Wh)'),
     'p_demand': fields.List(fields.Float, required=False, description='Minimum charge demand per time step (Wh)'),
+    'd_demand': fields.List(fields.Float, required=False, description='Minimum discharge demand per time step (Wh), forces the battery to discharge.'),
     's_goal': fields.List(fields.Float, required=False, description='Goal state of charge at each time step (Wh)'),
     'c_min': fields.Float(required=True, description='Minimum charge power (W)'),
     'c_max': fields.Float(required=True, description='Maximum charge power (W)'),
@@ -215,6 +216,7 @@ class OptimizeCharging(Resource):
                     s_max=bat_data['s_max'],
                     s_initial=bat_data['s_initial'],
                     p_demand=bat_data.get('p_demand'),
+                    d_demand=bat_data.get('d_demand'),
                     s_goal=bat_data.get('s_goal'),
                     c_min=bat_data['c_min'],
                     c_max=bat_data['c_max'],
@@ -239,12 +241,21 @@ class OptimizeCharging(Resource):
                 'dt': len(time_series.dt), 'gt': len(time_series.gt), 'ft': len(time_series.ft),
                 'p_N': len(time_series.p_N), 'p_E': len(time_series.p_E),
                 'p_demand': [len(bat.p_demand) for bat in batteries if bat.p_demand is not None],
+                'd_demand': [len(bat.d_demand) for bat in batteries if bat.d_demand is not None],
                 's_goal': [len(bat.s_goal) for bat in batteries if bat.s_goal is not None],
             }
 
-            if len({*[v for k, v in lengths.items() if k not in ('p_demand', 's_goal')],
-                    *lengths['p_demand'], *lengths['s_goal']}) > 1:
+            per_battery = ('p_demand', 'd_demand', 's_goal')
+            if len({*[v for k, v in lengths.items() if k not in per_battery],
+                    *[n for k in per_battery for n in lengths[k]]}) > 1:
                 api.abort(400, "All time series must have the same length", lengths=lengths)
+
+            # a step cannot charge and discharge on demand at once
+            for i, bat in enumerate(batteries):
+                if bat.p_demand is not None and bat.d_demand is not None:
+                    overlap = [t for t, (p, d) in enumerate(zip(bat.p_demand, bat.d_demand)) if p > 0 and d > 0]
+                    if overlap:
+                        api.abort(400, "p_demand and d_demand must not overlap", battery=i, steps=overlap)
 
         except BadRequest:
             raise
