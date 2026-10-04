@@ -50,6 +50,23 @@ The maximum is a single value out of the horizon, which leaves one gap: a load s
 
 One request is up to five solver runs under one wall clock, `OPTIMIZER_TIME_LIMIT` (10 s in production). Each stage keeps what the previous one found unless it can improve on it without spending money. The request log carries where the clock went (`stages`), which path was taken (`path`), what the tie break (`preferences`) and the continuity pass (`continuity`) did, and what the cost stage found (`cost_stage_value`) against what it could not rule out (`cost_stage_gap`, currency, zero when proven).
 
+```mermaid
+flowchart TD
+    build["build<br/>MILP, objective scaled"] --> probe{"probe<br/>cost and preferences in one solve, PROBE_SHARE of the limit"}
+    probe -- "proven optimal" --> joint["path joint"]
+    probe -- "not proven" --> cost{"cost<br/>money only, stopped on OPTIMIZER_GAP_ABS, at most COST_TIME_LIMIT"}
+    cost -- "usable schedule" --> lp["tie_break LP<br/>binaries pinned, slack ladder if CBC calls the bound infeasible"]
+    cost -- "no usable schedule" --> kept["path split, kept the probe"]
+    lp --> milp["tie_break MILP<br/>clock permitting, at most MILP_PREFERENCE_TIME_LIMIT"]
+    gate{"continuity gate<br/>a battery has more than one session, and the probe or the cost stage took at most CONTINUITY_TIME_LIMIT"}
+    joint --> gate
+    milp --> gate
+    kept --> gate
+    gate -- "joint: cap CONTINUITY_TIME_LIMIT<br/>split: cap CONTINUITY_SPLIT_TIME_LIMIT" --> continuity["continuity<br/>fewest charge starts under the cost, preference and peak bounds"]
+    gate -- "not needed, or skipped" --> result
+    continuity --> result["result<br/>Optimal, Feasible or Not Solved"]
+```
+
 | Stage | Task | Runs when | Parameters |
 |---|---|---|---|
 | `build` | Build the MILP and scale its objective so the largest coefficient sits at `OBJECTIVE_TARGET`. | Always. | `OBJECTIVE_TARGET` 1e6 |
