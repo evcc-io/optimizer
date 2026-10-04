@@ -70,9 +70,9 @@ type BatteryConfig struct {
 
 	// DDemand Minimum discharge demand per time step (Wh). Forces the battery to discharge in the
 	// given steps, e.g. to sell into a high feed-in rate. The demand is clipped to d_max and
-	// is a soft goal: it is given up rather than draining the battery below s_min, and rather
+	// is a soft goal: it is released once the battery reaches s_min, and it is given up rather
 	// than making the request infeasible. Discharging into the grid additionally requires
-	// discharge_to_grid.
+	// discharge_to_grid. A step must not carry both p_demand and d_demand.
 	DDemand []float32 `json:"d_demand,omitempty"`
 
 	// DMax Maximum discharge power in W

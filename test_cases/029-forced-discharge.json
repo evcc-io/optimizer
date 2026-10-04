@@ -1,0 +1,137 @@
+{
+  "request": {
+    "eta_c": 0.95,
+    "eta_d": 0.95,
+    "strategy": {
+      "charging_strategy": "none",
+      "discharging_strategy": "none"
+    },
+    "batteries": [
+      {
+        "charge_from_grid": false,
+        "discharge_to_grid": true,
+        "s_capacity": 10000,
+        "s_min": 2000,
+        "s_max": 10000,
+        "s_initial": 10000,
+        "c_min": 0,
+        "c_max": 5000,
+        "d_max": 5000,
+        "p_a": 0.0003,
+        "d_demand": [
+          0,
+          2000,
+          3000,
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "time_series": {
+      "dt": [
+        3600,
+        3600,
+        3600,
+        3600,
+        3600,
+        3600
+      ],
+      "gt": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "ft": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "p_N": [
+        0.0003,
+        0.0003,
+        0.0003,
+        0.0003,
+        0.0003,
+        0.0003
+      ],
+      "p_E": [
+        0.0001,
+        0.0001,
+        0.0001,
+        0.0001,
+        0.0001,
+        0.0001
+      ]
+    }
+  },
+  "expected_response": {
+    "status": "Optimal",
+    "objective_value": -1.0789473699999999,
+    "limit_violations": {
+      "grid_import_limit_exceeded": false,
+      "grid_export_limit_hit": false
+    },
+    "batteries": [
+      {
+        "charging_power": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "discharging_power": [
+          0.0,
+          2000.0,
+          3000.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "state_of_charge": [
+          10000.0,
+          7894.7368,
+          4736.8421,
+          4736.8421,
+          4736.8421,
+          4736.8421
+        ]
+      }
+    ],
+    "grid_import": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "grid_export": [
+      0.0,
+      2000.0,
+      3000.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "flow_direction": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "grid_import_overshoot": [],
+    "grid_export_overshoot": []
+  },
+  "strict": true
+}

@@ -1,5 +1,7 @@
+import pulp
 import pytest
 
+from optimizer.app import app
 from optimizer.optimizer import BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
 
 
@@ -45,13 +47,17 @@ def test_discharge_demand_is_clipped_to_d_max():
 def test_discharge_demand_stops_at_the_s_min_reserve():
     # demanding more than the reserve allows must not drain through s_min: the SoC penalty
     # outweighs the unserved demand penalty, so the remainder is simply given up
-    result = build([5000, 5000, 0, 0], s_initial=4000, s_min=2000).solve()
+    optimizer = build([5000, 5000, 0, 0], s_initial=4000, s_min=2000)
+    result = optimizer.solve()
 
     assert result['status'] == 'Optimal'
     soc = result['batteries'][0]['state_of_charge']
     assert min(soc) == pytest.approx(2000)
     # 2000 Wh of usable content, delivered through the discharge efficiency
     assert sum(result['batteries'][0]['discharging_power']) == pytest.approx(2000 * 0.95)
+    # the demand is released at the reserve instead of being counted as unserved
+    assert pulp.value(optimizer.variables['d_demand_pen'][0][1]) == pytest.approx(0)
+    assert pulp.value(optimizer.variables['z_s_min_reached'][0][1]) == pytest.approx(1)
 
 
 def test_discharge_demand_is_soft_when_the_grid_is_the_only_sink():
@@ -61,3 +67,24 @@ def test_discharge_demand_is_soft_when_the_grid_is_the_only_sink():
 
     assert result['status'] == 'Optimal'
     assert result['batteries'][0]['discharging_power'][0] == pytest.approx(0)
+
+
+def test_overlapping_demands_are_rejected():
+    request = {
+        'batteries': [{
+            's_min': 0, 's_max': 10000, 's_initial': 5000,
+            'c_min': 0, 'c_max': 5000, 'd_max': 5000, 'p_a': 0.0001,
+            'p_demand': [0, 1000, 0], 'd_demand': [0, 1000, 500],
+        }],
+        'time_series': {
+            'dt': [3600] * 3, 'gt': [0] * 3, 'ft': [0] * 3,
+            'p_N': [0.0003] * 3, 'p_E': [0.0001] * 3,
+        },
+    }
+
+    response = app.test_client().post('/optimize/charge-schedule', json=request)
+
+    assert response.status_code == 400
+    assert response.json['message'] == 'p_demand and d_demand must not overlap'
+    assert response.json['battery'] == 0
+    assert response.json['steps'] == [1]
