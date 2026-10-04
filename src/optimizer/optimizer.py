@@ -160,7 +160,12 @@ COST_TIME_LIMIT = 3.0
 # spent its whole clock on the money gets no strategy at all.
 LP_PREFERENCE_TIME_LIMIT = 1.0
 
-CONTINUITY_TIME_LIMIT = 1.0
+# clock the continuity candidate may spend, and the solve time above which it is not tried at all,
+# see _continuity_clock. Always bounded by the request deadline. 1 s let the stage run on split
+# requests whose cost stage finished under a second, 45 % of them in production, and every one
+# of those ended at the cap with nothing kept, where the stored #170 request needs 1.1 s. The
+# production split ends around 5 to 6 s of the 10 s limit, so 2.5 s fits inside what is left.
+CONTINUITY_TIME_LIMIT = 2.5
 CONTINUITY_TOLERANCE = 1e-5
 
 # a cbc on PATH is preferred over the one pulp bundles, which is 2.10.3 built Dec 2019 and gets a
@@ -1039,10 +1044,10 @@ class Optimizer:
         """Seconds the continuity candidate may spend, or None with continuity_stage saying why not.
 
         The candidate is this model plus a start per step, under a bound on the cost it just
-        optimized, so it is the harder problem: it does not finish inside a second where the
+        optimized, so it is the harder problem: it does not finish inside the cap where the
         incumbent took longer than that. Measured over five days of production, 14 % of joint
         solves ran this stage and half of those sat on the cap with nothing to show (#146). The
-        incumbent's own clock says which ones they are before a second is spent: the probe on the
+        incumbent's own clock says which ones they are before the cap is spent: the probe on the
         joint path, the cost stage on the split path. Not the probe there: it spent its clock on
         the joint objective and failed, and alone it is PROBE_SHARE of the time limit, so counting
         it skipped the stage on every split request (#170).

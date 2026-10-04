@@ -57,45 +57,32 @@ def test_equal_prices_prefer_one_session(monkeypatch: pytest.MonkeyPatch, probe_
     assert model.stage_seconds['continuity'] >= 0
 
 
-def test_hard_solve_skips_continuity(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize('stage_seconds, expected_starts, expected_stage', [
     # the candidate cannot beat the clock of the solve that produced the incumbent, so a solve
     # that already took longer than the stage may spend gets no candidate at all
-    model = build()
-    seed_fragmented(model, monkeypatch)
-    seeded = model._probe_then_split
-
-    def slow(tmpdir: str, deadline: float | None) -> None:
-        seeded(tmpdir, deadline)
-        model.stage_seconds['probe'] = CONTINUITY_TIME_LIMIT + 1
-
-    monkeypatch.setattr(model, '_probe_then_split', slow)
-
-    result = model.solve()
-
-    assert starts(result['batteries'][0]['charging_power']) == 3
-    assert model.continuity_stage.startswith('skipped')
-    assert 'continuity' not in model.stage_seconds
-
-
-def test_split_solve_is_judged_by_its_cost_stage(monkeypatch: pytest.MonkeyPatch):
+    ({'probe': CONTINUITY_TIME_LIMIT + 1}, 3, 'skipped'),
     # on the split path the probe spent its clock on the joint objective and failed, so it says
     # nothing about the candidate; the cost stage it extends does. Counting the probe skipped the
     # stage on every split request, the probe alone being PROBE_SHARE of the time limit (#170)
+    ({'probe': CONTINUITY_TIME_LIMIT + 1, 'cost': 0.1}, 1, 'improved 3 to 1'),
+])
+def test_continuity_is_gated_by_the_clock_of_the_stage_it_extends(
+        monkeypatch: pytest.MonkeyPatch, stage_seconds: dict[str, float], expected_starts: int, expected_stage: str):
     model = build()
     seed_fragmented(model, monkeypatch)
     seeded = model._probe_then_split
 
-    def split(tmpdir: str, deadline: float | None) -> None:
+    def timed(tmpdir: str, deadline: float | None) -> None:
         seeded(tmpdir, deadline)
-        model.stage_seconds['probe'] = CONTINUITY_TIME_LIMIT + 1
-        model.stage_seconds['cost'] = 0.1
+        model.stage_seconds.update(stage_seconds)
 
-    monkeypatch.setattr(model, '_probe_then_split', split)
+    monkeypatch.setattr(model, '_probe_then_split', timed)
 
     result = model.solve()
 
-    assert starts(result['batteries'][0]['charging_power']) == 1
-    assert model.continuity_stage == 'improved 3 to 1'
+    assert starts(result['batteries'][0]['charging_power']) == expected_starts
+    assert model.continuity_stage.startswith(expected_stage)
+    assert ('continuity' in model.stage_seconds) == expected_stage.startswith('improved')
 
 
 @pytest.mark.parametrize('schedule', [(0, 500, 0, 500, 0, 500), (0, 500, 500, 500, 0, 0)])
