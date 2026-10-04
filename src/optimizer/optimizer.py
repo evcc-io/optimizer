@@ -1,3 +1,5 @@
+import os
+import re
 import shutil
 import time
 from contextlib import contextmanager
@@ -145,6 +147,13 @@ PREFERENCE_TIME_SHARE = 0.25
 # Requests without a time limit stay uncapped, they asked to be solved out.
 MILP_PREFERENCE_TIME_LIMIT = 2.5
 
+# clock the cost stage may spend on a split. Absolute rather than what the reserve leaves of the
+# limit: the stage is anytime branch and bound and consumes whatever it is offered, so on the
+# production 10 s limit every split ran 5.4 s of it and 17 percent of them ended past the limit.
+# The split is 3 percent of the traffic and 38 percent of the CPU. Whether the seconds past 3 buy
+# money is what cost_stage_gap is logged to answer. Requests without a time limit stay uncapped.
+COST_TIME_LIMIT = 3.0
+
 # clock the pinned LP tie break may use. It is a linear program over a schedule that is already
 # feasible, worst measured 0.165 s over the stored cases, so this is a guard against a pathological
 # model rather than a budget. It runs even once the deadline is gone: without it a request that
@@ -236,6 +245,9 @@ class Optimizer:
         # found before it ran. Everything below that value was given away deciding the tie.
         self.preference_stage = None
         self.cost_stage_value = None
+        # money the cost stage could not rule out above its schedule, in currency. Zero when it
+        # proved the value, None when it did not run.
+        self.cost_stage_gap = None
         # 'joint' when the probe proved the whole objective, 'split' when it fell back
         self.solve_path = None
         # wall clock per stage of the last solve(), keyed build/probe/cost/tie_break. What the
@@ -781,6 +793,26 @@ class Optimizer:
             self.stage_seconds[stage] = round(
                 self.stage_seconds.get(stage, 0.) + time.monotonic() - started, 4)
 
+    @staticmethod
+    def _cbc_gap(log_path, scale) -> float | None:
+        """Distance between CBC's schedule and its bound, from the log, in currency.
+
+        The solution file carries no bound, only the log does: a proven solve prints none and the
+        gap is zero, a stopped one prints the bound it reached.
+        """
+        # no log, no solver run behind the values, see the faked stages in the tests
+        if not os.path.exists(log_path):
+            return None
+        with open(log_path) as log:
+            text = log.read()
+        value = re.search(r'^Objective value:\s+(\S+)', text, re.MULTILINE)
+        if value is None:
+            return None
+        bound = re.search(r'^(?:Lower|Upper) bound:\s+(\S+)', text, re.MULTILINE)
+        if bound is None:
+            return 0.
+        return abs(float(bound.group(1)) - float(value.group(1))) / scale
+
     def _pin_integers(self):
         """Freeze every integer variable on the value it currently holds, undo data returned.
 
@@ -923,6 +955,9 @@ class Optimizer:
 
         A device reported as charging enters the horizon switched on, so keeping it on is free and
         interrupting it costs a start.
+
+        Leaves continuity_stage behind, the way the tie break leaves preference_stage: what the
+        stage did, or why it did nothing, one string per solve for the request log.
         """
         if (self.problem.sol_status not in (pulp.LpSolutionOptimal, pulp.LpSolutionIntegerFeasible)
                 or not _complete_solution(self.problem) or not self._is_integral()):
@@ -930,22 +965,19 @@ class Optimizer:
 
         eligible = [i for i, active in self.variables['z_c'].items() if active is not None]
 
-        def charging_now(i: int) -> int:
-            return int(self.batteries[i].c_active)
-
         def count_starts() -> list[int]:
             counts = []
             for i in eligible:
                 active = np.array([pulp.value(v) for v in self.variables['c'][i]]) > CONTINUITY_TOLERANCE
-                counts.append(int(np.count_nonzero(active & ~np.r_[bool(charging_now(i)), active[:-1]])))
+                counts.append(int(np.count_nonzero(active & ~np.r_[self.batteries[i].c_active, active[:-1]])))
             return counts
 
         before = count_starts()
         # a device that is charging already can reach zero starts, one that is idle needs one
-        if all(count <= 1 - charging_now(i) for i, count in zip(eligible, before)):
+        if all(count <= 1 - self.batteries[i].c_active for i, count in zip(eligible, before)):
             return
-        remaining = CONTINUITY_TIME_LIMIT if deadline is None else min(CONTINUITY_TIME_LIMIT, deadline - time.monotonic())
-        if remaining <= 0:
+        remaining = self._continuity_clock(deadline)
+        if remaining is None:
             return
 
         solution = {var: var.varValue for var in self.problem.variables()}
@@ -968,7 +1000,7 @@ class Optimizer:
             active = self.variables['z_c'][i]
             for t in self.time_steps:
                 start = pulp.LpVariable(f'charge_start_{i}_{t}', lowBound=0, upBound=1)
-                candidate += start >= active[t] - (active[t - 1] if t else charging_now(i))
+                candidate += start >= active[t] - (active[t - 1] if t else int(self.batteries[i].c_active))
                 starts.append(start)
         candidate.setObjective(-pulp.lpSum(starts))
 
@@ -977,25 +1009,53 @@ class Optimizer:
             if deadline is not None:
                 remaining = min(remaining, deadline - time.monotonic())
                 if remaining <= 0:
+                    self.continuity_stage = 'no time'
                     return
-            candidate.solve(self._solver(tmpdir, timeLimit=remaining))
+            with self._timed('continuity'):
+                candidate.solve(self._solver(tmpdir, timeLimit=remaining))
+            self.continuity_stage = 'MILP ' + pulp.LpStatus[candidate.status] + ' unused'
             if (candidate.sol_status not in (pulp.LpSolutionOptimal, pulp.LpSolutionIntegerFeasible)
                     or not _complete_solution(candidate) or not self._is_integral()):
                 return
             # CBC writes its solution with 8 significant digits, so a balance row over a 40 kWh
             # SOC comes back off by up to 1e-3 and candidate.valid(1e-5) rejects every candidate
             # (#146). CBC already held the model rows; only the bounds added here need checking.
+            after = count_starts()
             improved = (pulp.value(self.cost_objective) >= cost - 2 * CONTINUITY_TOLERANCE
                         and pulp.value(preference) >= preferred - 2 * CONTINUITY_TOLERANCE
                         and all(pulp.value(self.variables[f'p_{side}_peak']) <= peak_values[side] + 2 * CONTINUITY_TOLERANCE
                                 for side in self.peak_sides)
-                        and sum(count_starts()) < sum(before))
+                        and sum(after) < sum(before))
+            if improved:
+                self.continuity_stage = f'improved {sum(before)} to {sum(after)}'
         except pulp.PulpSolverError:
-            return
+            self.continuity_stage = 'solver error'
         finally:
             if not improved:
                 for var, value in solution.items():
                     var.varValue = value
+
+    def _continuity_clock(self, deadline: float | None) -> float | None:
+        """Seconds the continuity candidate may spend, or None with continuity_stage saying why not.
+
+        The candidate is this model plus a start per step, under a bound on the cost it just
+        optimized, so it is the harder problem: it does not finish inside a second where the
+        incumbent took longer than that. Measured over five days of production, 14 % of joint
+        solves ran this stage and half of those sat on the cap with nothing to show (#146). The
+        incumbent's own clock says which ones they are before a second is spent: the probe on the
+        joint path, the cost stage on the split path. Not the probe there: it spent its clock on
+        the joint objective and failed, and alone it is PROBE_SHARE of the time limit, so counting
+        it skipped the stage on every split request (#170).
+        """
+        spent = self.stage_seconds.get('cost', self.stage_seconds.get('probe', 0.))
+        if spent > CONTINUITY_TIME_LIMIT:
+            self.continuity_stage = f'skipped, solve took {spent:.1f} s'
+            return None
+        remaining = CONTINUITY_TIME_LIMIT if deadline is None else min(CONTINUITY_TIME_LIMIT, deadline - time.monotonic())
+        if remaining <= 0:
+            self.continuity_stage = 'no time'
+            return None
+        return remaining
 
     def _probe_then_split(self, tmpdir, deadline) -> None:
         """
@@ -1044,10 +1104,12 @@ class Optimizer:
         # use, see PREFERENCE_TIME_SHARE
         reserve = (0. if self.settings.time_limit is None
                    else self.settings.time_limit * PREFERENCE_TIME_SHARE)
-        remaining = None if deadline is None else max(deadline - reserve - time.monotonic(), 0.1)
+        remaining = None if deadline is None else max(min(COST_TIME_LIMIT, deadline - reserve - time.monotonic()), 0.1)
+        log_path = os.path.join(tmpdir, 'cost.log')
         with self._timed('cost'):
-            self.problem.solve(self._solver(tmpdir, timeLimit=remaining,
+            self.problem.solve(self._solver(tmpdir, timeLimit=remaining, logPath=log_path,
                                             gapAbs=None if gap_abs is None else gap_abs * scale))
+        self.cost_stage_gap = self._cbc_gap(log_path, scale)
 
         if pulp.LpStatus[self.problem.status] == 'Optimal' and self._is_feasible():
             # the cost stage is allowed to stop on its gap, so LpSolutionOptimal is not required of
@@ -1091,6 +1153,7 @@ class Optimizer:
         """
 
         self.stage_seconds = {}
+        self.continuity_stage = 'not needed'
         if self.problem is None:
             with self._timed('build'):
                 self.create_model()

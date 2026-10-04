@@ -15,6 +15,8 @@ def test_joint_path_times_build_and_probe():
 
     assert optimizer.solve_path == 'joint'
     assert set(optimizer.stage_seconds) == {'build', 'probe'}
+    # no cost stage ran, so there is no gap to report
+    assert optimizer.cost_stage_gap is None
     assert all(seconds >= 0 for seconds in optimizer.stage_seconds.values())
 
 
@@ -28,3 +30,7 @@ def test_split_path_times_every_stage():
     # no probe ran, so no probe key: an absent stage must be absent, not zero
     assert set(optimizer.stage_seconds) == {'build', 'cost', 'tie_break'}
     assert all(seconds >= 0 for seconds in optimizer.stage_seconds.values())
+    # the cost stage leaves behind what it found and what CBC could not rule out above it
+    assert optimizer.cost_stage_value is not None
+    assert optimizer.cost_stage_gap is not None
+    assert optimizer.cost_stage_gap >= 0
