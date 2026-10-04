@@ -487,7 +487,6 @@ resource spot 'Microsoft.Compute/virtualMachineScaleSets@2024-07-01' = {
             name: 'nic'
             properties: {
               primary: true
-              networkSecurityGroup: { id: vmNsg.id }
               ipConfigurations: [
                 {
                   name: 'ipconfig'

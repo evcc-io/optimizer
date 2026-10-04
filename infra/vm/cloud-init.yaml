@@ -9,7 +9,6 @@ packages:
   - docker-compose-v2
   - certbot
   - jq
-  - curl
   - netcat-openbsd
 
 write_files:
