@@ -6,8 +6,7 @@ import numpy as np
 import pulp
 import pytest
 
-from optimizer.optimizer import (CONTINUITY_TIME_LIMIT, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer,
-                                 TimeSeriesData)
+from optimizer.optimizer import CONTINUITY_TIME_LIMIT, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
 
 
 def build(strategy: str = 'none') -> Optimizer:
@@ -76,6 +75,27 @@ def test_hard_solve_skips_continuity(monkeypatch: pytest.MonkeyPatch):
     assert starts(result['batteries'][0]['charging_power']) == 3
     assert model.continuity_stage.startswith('skipped')
     assert 'continuity' not in model.stage_seconds
+
+
+def test_split_solve_is_judged_by_its_cost_stage(monkeypatch: pytest.MonkeyPatch):
+    # on the split path the probe spent its clock on the joint objective and failed, so it says
+    # nothing about the candidate; the cost stage it extends does. Counting the probe skipped the
+    # stage on every split request, the probe alone being PROBE_SHARE of the time limit (#170)
+    model = build()
+    seed_fragmented(model, monkeypatch)
+    seeded = model._probe_then_split
+
+    def split(tmpdir: str, deadline: float | None) -> None:
+        seeded(tmpdir, deadline)
+        model.stage_seconds['probe'] = CONTINUITY_TIME_LIMIT + 1
+        model.stage_seconds['cost'] = 0.1
+
+    monkeypatch.setattr(model, '_probe_then_split', split)
+
+    result = model.solve()
+
+    assert starts(result['batteries'][0]['charging_power']) == 1
+    assert model.continuity_stage == 'improved 3 to 1'
 
 
 @pytest.mark.parametrize('schedule', [(0, 500, 0, 500, 0, 500), (0, 500, 500, 500, 0, 0)])

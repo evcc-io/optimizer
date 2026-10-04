@@ -800,6 +800,9 @@ class Optimizer:
         The solution file carries no bound, only the log does: a proven solve prints none and the
         gap is zero, a stopped one prints the bound it reached.
         """
+        # no log, no solver run behind the values, see the faked stages in the tests
+        if not os.path.exists(log_path):
+            return None
         with open(log_path) as log:
             text = log.read()
         value = re.search(r'^Objective value:\s+(\S+)', text, re.MULTILINE)
@@ -973,18 +976,8 @@ class Optimizer:
         # a device that is charging already can reach zero starts, one that is idle needs one
         if all(count <= 1 - self.batteries[i].c_active for i, count in zip(eligible, before)):
             return
-        # the candidate is this model plus a start per step, under a bound on the cost it just
-        # optimized, so it is the harder problem: it does not finish inside a second where the
-        # incumbent took longer than that. Measured over five days of production, 14 % of joint
-        # solves ran this stage and half of those sat on the cap with nothing to show (#146). The
-        # incumbent's own clock says which ones they are before a second is spent.
-        spent = self.stage_seconds.get('probe', 0.) + self.stage_seconds.get('cost', 0.)
-        if spent > CONTINUITY_TIME_LIMIT:
-            self.continuity_stage = f'skipped, solve took {spent:.1f} s'
-            return
-        remaining = CONTINUITY_TIME_LIMIT if deadline is None else min(CONTINUITY_TIME_LIMIT, deadline - time.monotonic())
-        if remaining <= 0:
-            self.continuity_stage = 'no time'
+        remaining = self._continuity_clock(deadline)
+        if remaining is None:
             return
 
         solution = {var: var.varValue for var in self.problem.variables()}
@@ -1037,11 +1030,32 @@ class Optimizer:
                 self.continuity_stage = f'improved {sum(before)} to {sum(after)}'
         except pulp.PulpSolverError:
             self.continuity_stage = 'solver error'
-            return
         finally:
             if not improved:
                 for var, value in solution.items():
                     var.varValue = value
+
+    def _continuity_clock(self, deadline: float | None) -> float | None:
+        """Seconds the continuity candidate may spend, or None with continuity_stage saying why not.
+
+        The candidate is this model plus a start per step, under a bound on the cost it just
+        optimized, so it is the harder problem: it does not finish inside a second where the
+        incumbent took longer than that. Measured over five days of production, 14 % of joint
+        solves ran this stage and half of those sat on the cap with nothing to show (#146). The
+        incumbent's own clock says which ones they are before a second is spent: the probe on the
+        joint path, the cost stage on the split path. Not the probe there: it spent its clock on
+        the joint objective and failed, and alone it is PROBE_SHARE of the time limit, so counting
+        it skipped the stage on every split request (#170).
+        """
+        spent = self.stage_seconds.get('cost', self.stage_seconds.get('probe', 0.))
+        if spent > CONTINUITY_TIME_LIMIT:
+            self.continuity_stage = f'skipped, solve took {spent:.1f} s'
+            return None
+        remaining = CONTINUITY_TIME_LIMIT if deadline is None else min(CONTINUITY_TIME_LIMIT, deadline - time.monotonic())
+        if remaining <= 0:
+            self.continuity_stage = 'no time'
+            return None
+        return remaining
 
     def _probe_then_split(self, tmpdir, deadline) -> None:
         """
