@@ -1067,22 +1067,44 @@ class Optimizer:
             return None
         return remaining
 
+    def _gap_abs(self) -> float | None:
+        """Absolute MIP gap for this request in currency units: gap_abs, raised to gap_share of the
+        goal energy its batteries still need, valued at the mean import price.
+
+        A fixed cent sits below the slack the c_min gate leaves in the LP relaxation whenever a
+        vehicle's minimum power is a sizeable share of a slot. The relaxation charges below c_min
+        on a fractional z, the integer schedule cannot, and CBC has to enumerate to prove the
+        difference: 9 ct and no proof in 110 minutes on the request of #186, where 2.5 ct proves
+        the same schedule in 1.5 s. Scaled with what the request moves, the gap clears that slack
+        on the goal requests and stays at the cent on everything else.
+        """
+        gap = self.settings.gap_abs
+        if gap is None or not self.settings.gap_share:
+            return gap
+        need = sum(max(max(bat.s_goal) - bat.s_initial, 0.) / self.eta_c for bat in self.batteries if bat.s_goal)
+        return max(gap, self.settings.gap_share * need * float(np.mean(self.time_series.p_N)))
+
     def _probe_then_split(self, tmpdir, deadline) -> None:
         """
         Solve the whole objective if it can be proved quickly, otherwise fall back to the split.
 
         Splitting the solve only pays on a degenerate plateau, and a request that proves the joint
-        objective never had one: it decided its own tie, in one solve, with no gap and no
-        preference budget to give anything away. That is a better answer than the split can
-        produce, and most requests reach it, so the split is reserved for the ones that would
+        objective never had one: it decided its own tie, in one solve, within the absolute gap and
+        with no preference budget to give anything away. That is a better answer than the split
+        can produce, and most requests reach it, so the split is reserved for the ones that would
         otherwise run into the time limit.
         """
         probe = self.settings.probe_seconds
         if probe is None and self.settings.time_limit is not None:
             probe = self.settings.time_limit * PROBE_SHARE
+        # the gap is in currency units and carries the model's own scale factor, otherwise a cent
+        # would reach the solver in whatever unit the scaling happened to land on
+        gap_abs = self._gap_abs()
+        scale = self.objective_scale
+        scaled_gap = None if gap_abs is None else gap_abs * scale
         if probe != 0:
             with self._timed('probe'):
-                self.problem.solve(self._solver(tmpdir, timeLimit=probe))
+                self.problem.solve(self._solver(tmpdir, timeLimit=probe, gapAbs=scaled_gap))
 
         # sol_status, not status: pulp reports LpStatusOptimal whenever CBC came back with any
         # feasible solution, including one it stopped on at the time limit. Measured on a captured
@@ -1095,9 +1117,7 @@ class Optimizer:
             return
 
         # one of the hard ones. Money first with the absolute gap, which is what stops the plateau
-        # walk, then the tie break over the schedules money left equal. The gap is in currency
-        # units and carries the model's own scale factor, otherwise a cent would reach the solver
-        # in whatever unit the scaling happened to land on.
+        # walk, then the tie break over the schedules money left equal.
         self.solve_path = 'split'
         # whatever the probe reached is a feasible schedule. Keep it: the split now has less clock
         # than it would have had alone, and on the hardest captured request that was the difference
@@ -1107,8 +1127,6 @@ class Optimizer:
                                                    pulp.LpSolutionIntegerFeasible)
                     and self._is_feasible() else None)
 
-        gap_abs = self.settings.gap_abs
-        scale = self.objective_scale
         self.problem.setObjective(self.cost_objective * scale)
         # the tie break's slice comes off here rather than being whatever the cost stage did not
         # use, see PREFERENCE_TIME_SHARE
@@ -1117,8 +1135,7 @@ class Optimizer:
         remaining = None if deadline is None else max(min(COST_TIME_LIMIT, deadline - reserve - time.monotonic()), 0.1)
         log_path = os.path.join(tmpdir, 'cost.log')
         with self._timed('cost'):
-            self.problem.solve(self._solver(tmpdir, timeLimit=remaining, logPath=log_path,
-                                            gapAbs=None if gap_abs is None else gap_abs * scale))
+            self.problem.solve(self._solver(tmpdir, timeLimit=remaining, logPath=log_path, gapAbs=scaled_gap))
         self.cost_stage_gap = self._cbc_gap(log_path, scale)
 
         if pulp.LpStatus[self.problem.status] == 'Optimal' and self._is_feasible():
