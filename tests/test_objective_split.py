@@ -7,7 +7,17 @@ import numpy
 import pulp
 import pytest
 
-from optimizer.optimizer import COST_BOUND_SLACK, PREFERENCE_TIME_SHARE, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
+from optimizer.optimizer import (
+    COST_BOUND_SLACK,
+    MILP_PREFERENCE_TIME_LIMIT,
+    PREFERENCE_TIME_SHARE,
+    BatteryConfig,
+    GridConfig,
+    OptimizationStrategy,
+    Optimizer,
+    TimeSeriesData,
+)
+from optimizer.settings import OptimizerSettings
 
 # a plain case, one that leans on the priorities, and one that levels grid peaks. The last is the
 # one where the preferences are worth enough real money to be tempted to buy some
@@ -46,6 +56,27 @@ def solve_cost_only(optimizer):
     optimizer.problem.setObjective(optimizer.cost_objective * optimizer.objective_scale)
     optimizer.problem.solve(pulp.PULP_CBC_CMD(msg=0))
     return optimizer
+
+
+def test_the_milp_tie_break_spend_is_capped(monkeypatch):
+    # the reserve seats the stage, MILP_PREFERENCE_TIME_LIMIT caps what it spends: measured over
+    # captured splits, everything the MILP finds arrives within the cap and the rest of the
+    # reserved slice is pure response time
+    optimizer = build('026-attenuate-grid-peaks')
+    optimizer.settings = OptimizerSettings(probe_seconds=0, time_limit=10)
+    limits = []
+    real_solver = Optimizer._solver
+
+    def spying(self, tmpdir, **options):
+        limits.append(options.get('timeLimit'))
+        return real_solver(self, tmpdir, **options)
+
+    monkeypatch.setattr(Optimizer, '_solver', spying)
+    optimizer.solve()
+
+    # the MILP is the last solve, after the cost stage and the LP floor
+    assert limits[-1] == MILP_PREFERENCE_TIME_LIMIT
+    assert 'MILP' in optimizer.preference_stage
 
 
 def test_the_lp_floor_relaxes_a_bound_cbc_reports_infeasible(monkeypatch):
