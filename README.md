@@ -19,31 +19,31 @@ Inspired by https://github.com/Akkudoktor-EOS/EOS/pull/462
 
 ## Example
 
-A real household over two days: an 8.2 kWh home battery, a full EV in the carport, a PV forecast, a flat 32.5 ct tariff, 224 steps of 15 minutes. Grid power is the line, PV forecast and household consumption the inputs, the bars are what the optimizer schedules for each battery.
+Two days in 15 minute steps: a 10 kWh home battery at 50 %, a 50 kWh EV at 20 % that must reach 80 % by 08:00 on a 3.7 kW single phase connection, a 4 kWp PV forecast, and a dynamic tariff between 18 ct at noon and 44 ct at 19:00. Grid power is the line, PV forecast and household consumption the inputs, the bars are what the optimizer schedules for each battery.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-plan-dark.png">
-  <img alt="Charging plan: grid power, solar forecast, consumption and the home battery's charging schedule over two days" src="docs/img/example-plan-light.png">
+  <img alt="Charging plan: the EV charges through the night at 3.7 kW, PV surplus goes into the EV and then the home battery, the battery covers the evening peak" src="docs/img/example-plan-light.png">
 </picture>
 
-Nothing to buy: the home battery carries the house through the night and refills from the first PV surplus of the morning, because `charge_before_export` makes self-consumption the tie-breaker. It is full before noon and the rest of the day exports. The EV is at its goal and stays idle.
+The EV takes its 30 kWh in the eight cheapest hours before the deadline, from 22:00 to 06:00 at full power, and stops exactly at the goal. The morning PV surplus then goes into the EV and after noon into the home battery rather than to the grid, because `charge_before_export` makes self-consumption the tie-breaker. From there the battery covers the 44 ct evening peak and the night, and the house imports nothing until the next PV surplus arrives.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-soc-dark.png">
-  <img alt="SoC projections: the EV flat at 100 percent, the home battery cycling between its overnight low and its charge limit" src="docs/img/example-soc-light.png">
+  <img alt="SoC projections: the EV climbing from 20 to 80 percent overnight and to full on PV, the home battery cycling between its overnight low and full" src="docs/img/example-soc-light.png">
 </picture>
 
 ## Levelling grid peaks
 
-Cheapest is not always kindest to the grid connection. On a flat tariff nothing but the strategy decides when to charge, and `charge_before_export` takes the morning surplus as early as it can: a 3 kW burst into the battery at 08:00, then 4.5 kW of feed-in at noon.
+Cheapest is not always kindest to the grid connection. Above, the home battery fills in one block after noon and the rest of the midday surplus leaves as a 3 kW feed-in peak.
 
-`attenuate_grid_peaks` penalizes the highest grid power over the horizon, on the import and the feed-in side. The same household then spreads the refill over the whole solar window and holds the feed-in to a flat 3 kW plateau. Nothing costs more, the connection just sees a calmer profile. `attenuate_demand_peaks` and `attenuate_feedin_peaks` do the same for one side only.
+`attenuate_grid_peaks` penalizes the highest grid power over the horizon, on the import and the feed-in side. The same household then spreads the battery refill over the whole solar window and holds the feed-in to a flat 1 kW plateau. The night import stays where it is: the EV needs its eight hours at 3.7 kW either way. Nothing costs more, the connection just sees a calmer profile. `attenuate_demand_peaks` and `attenuate_feedin_peaks` do the same for one side only.
 
 The maximum is a single value out of the horizon, which leaves one gap: a load spike the schedule cannot touch, an oven, a heat pump defrost, fixes it, and the penalty then has nothing left to win below it. Charging flat out against the spike scores the same as spreading the same energy over the window, and the solver may pick either.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-peak-dark.png">
-  <img alt="Charging plan with attenuate_grid_peaks: the battery refill spread over the solar window and the feed-in held to a flat plateau" src="docs/img/example-peak-light.png">
+  <img alt="Charging plan with attenuate_grid_peaks: the battery refill spread over the solar window and the feed-in held to a flat 1 kW plateau" src="docs/img/example-peak-light.png">
 </picture>
 
 ## How a request is solved
