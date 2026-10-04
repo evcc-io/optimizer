@@ -315,10 +315,8 @@ class Optimizer:
         # grid sides leveled by the active peak attenuation strategy, empty for all other strategies
         self.peak_sides = PEAK_STRATEGY_SIDES.get(strategy.charging_strategy, ())
 
-        # steps whose grid cost is taken as the mean over the forecast band ft +- ft_err instead of
-        # at ft. Skipped where export pays more than import: the band's import and export are not
-        # locked against each other by a direction binary, so there the pair could pocket the
-        # difference on paper.
+        # steps priced as the mean over ft +- ft_err. Skipped where export pays more than import: the
+        # band's import and export share no direction binary, so there they could pocket the difference.
         self.band_steps = set()
         if time_series.ft_err is not None:
             self.band_steps = {t for t in self.time_steps
@@ -327,8 +325,7 @@ class Optimizer:
     def _grid_value(self, value=lambda var: var):
         """
         Export revenue less import cost over the horizon. value maps a variable to what enters the
-        sum: the variable itself for the objective, pulp.value for the result. Import beyond
-        p_max_imp is priced like the rest, the limit itself is enforced by its penalty.
+        sum: itself for the objective, pulp.value for the result. Import beyond p_max_imp costs the same.
         """
         total = 0
         for t in self.time_steps:
@@ -619,9 +616,8 @@ class Optimizer:
                              == e_grid_exp
                              + self.time_series.gt[t])
 
-            # the same balance with the production off by ft_err either way. The schedule stays,
-            # the deviation lands on the grid: a shortfall cannot raise the export, a surplus
-            # cannot raise the import.
+            # the same balance with the production off by ft_err either way. The schedule stays, the
+            # deviation lands on the grid: a shortfall cannot raise the export, a surplus not the import.
             if t in self.band_steps:
                 err = self.time_series.ft_err[t]
                 self.problem += self.variables['n_lo'][t] - self.variables['e_lo'][t] == e_grid_imp - e_grid_exp + err
