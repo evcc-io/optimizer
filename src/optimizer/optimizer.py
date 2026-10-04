@@ -323,8 +323,7 @@ class Optimizer:
         weights = np.zeros(self.T)
         if bat.r_departure is not None:
             weights[:] = bat.r_departure
-        if self.T:
-            weights[-1] += 1 - weights.sum()
+        weights[-1] += 1 - weights.sum()
         return weights
 
     def create_model(self):
