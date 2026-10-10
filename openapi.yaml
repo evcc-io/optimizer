@@ -280,6 +280,19 @@ components:
           maximum: 2
           default: 0
           description: Charging and discharging priority 0..2 compared to other batteries. 2 = highest priority.
+        r_departure:
+          type: array
+          items:
+            type: number
+            minimum: 0
+            maximum: 1
+          description: |
+            Probability that the device leaves during each time step, summing to at most 1. The remainder
+            is the probability it stays past the horizon. p_a then values the state of charge the device
+            is expected to leave with instead of the state at the end of the horizon, so a charge that may
+            be cut short by the departure is worth less than one that is already in. Without it the device
+            is assumed to stay.
+          example: [0, 0, 0.1, 0.3, 0.4, 0]
 
     TimeSeries:
       type: object

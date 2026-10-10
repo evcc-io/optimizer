@@ -144,7 +144,9 @@ battery_config_model = api.model('BatteryConfig', {
     'c_active': fields.Boolean(required=False, description='Whether the device is charging at the start of the time horizon.'),
     'd_max': fields.Float(required=True, description='Maximum discharge power (W)'),
     'p_a': fields.Float(required=True, description='Monetary value per Wh at end of the optimization horizon'),
-    'c_priority': fields.Integer(required=False, description='Charging and discharging priority compared to other batteries. 2 = highest priority.')
+    'c_priority': fields.Integer(required=False, description='Charging and discharging priority compared to other batteries. 2 = highest priority.'),
+    'r_departure': fields.List(fields.Float, required=False,
+                               description='Probability that the device leaves during each time step. The remainder stays past the horizon.'),
 })
 
 time_series_model = api.model('TimeSeries', {
@@ -236,6 +238,7 @@ class OptimizeCharging(Resource):
                     d_max=bat_data['d_max'],
                     p_a=bat_data['p_a'],
                     c_priority=bat_data.get('c_priority', 0),
+                    r_departure=bat_data.get('r_departure'),
                 ))
 
             # Parse time series data
@@ -254,14 +257,20 @@ class OptimizeCharging(Resource):
                 'p_N': len(time_series.p_N), 'p_E': len(time_series.p_E),
                 'p_demand': [len(bat.p_demand) for bat in batteries if bat.p_demand is not None],
                 's_goal': [len(bat.s_goal) for bat in batteries if bat.s_goal is not None],
+                'r_departure': [len(bat.r_departure) for bat in batteries if bat.r_departure is not None],
             }
 
-            if len({*[v for k, v in lengths.items() if k not in ('p_demand', 's_goal')],
-                    *lengths['p_demand'], *lengths['s_goal']}) > 1:
+            per_battery = ('p_demand', 's_goal', 'r_departure')
+            if len({*[v for k, v in lengths.items() if k not in per_battery],
+                    *[n for k in per_battery for n in lengths[k]]}) > 1:
                 api.abort(400, "All time series must have the same length", lengths=lengths)
 
             if lengths['dt'] == 0:
                 api.abort(400, "Time series must not be empty")
+
+            for bat in batteries:
+                if bat.r_departure is not None and (min(bat.r_departure) < 0 or sum(bat.r_departure) > 1 + 1e-6):
+                    api.abort(400, "r_departure must be probabilities summing to at most 1")
 
         except BadRequest:
             raise

@@ -207,6 +207,7 @@ class BatteryConfig:
     s_goal: Optional[List[float]] = None  # Goal state of charge (Wh)
     c_priority: int = 0
     c_active: bool = False  # Whether the device is charging at the start of the horizon
+    r_departure: Optional[List[float]] = None  # Probability the device leaves during each step
 
 
 @dataclass
@@ -314,6 +315,26 @@ class Optimizer:
         # grid sides leveled by the active peak attenuation strategy, empty for all other strategies
         self.peak_sides = PEAK_STRATEGY_SIDES.get(strategy.charging_strategy, ())
 
+    def _soc_value_weights(self, bat: BatteryConfig) -> np.ndarray:
+        """
+        Probability that s[t] is the state the battery is left in, which p_a then values. Without
+        departure probabilities that is the last step alone.
+        """
+        weights = np.zeros(self.T)
+        if bat.r_departure is not None:
+            weights[:] = bat.r_departure
+        weights[-1] += 1 - weights.sum()
+        return weights
+
+    def _present(self, bat: BatteryConfig) -> np.ndarray:
+        """
+        1 for the steps the device may still be connected at the start of, 0 once it has certainly left
+        """
+        if bat.r_departure is None:
+            return np.ones(self.T)
+        gone = np.cumsum(bat.r_departure) >= 1 - 1e-6
+        return np.concatenate(([1.], 1. - gone[:-1]))
+
     def create_model(self):
         """
         Create and initialize the MILP model
@@ -335,16 +356,18 @@ class Optimizer:
         # Charging power variables [Wh]
         self.variables['c'] = {}
         for i, bat in enumerate(self.batteries):
+            present = self._present(bat)
             self.variables['c'][i] = [
-                pulp.LpVariable(f"c_{i}_{t}", lowBound=0, upBound=bat.c_max * self.time_series.dt[t] / 3600.)
+                pulp.LpVariable(f"c_{i}_{t}", lowBound=0, upBound=bat.c_max * self.time_series.dt[t] / 3600. * present[t])
                 for t in self.time_steps
             ]
 
         # Discharging power variables [Wh]
         self.variables['d'] = {}
         for i, bat in enumerate(self.batteries):
+            present = self._present(bat)
             self.variables['d'][i] = [
-                pulp.LpVariable(f"d_{i}_{t}", lowBound=0, upBound=bat.d_max * self.time_series.dt[t] / 3600.)
+                pulp.LpVariable(f"d_{i}_{t}", lowBound=0, upBound=bat.d_max * self.time_series.dt[t] / 3600. * present[t])
                 for t in self.time_steps
             ]
 
@@ -470,9 +493,11 @@ class Optimizer:
         for t in self.time_steps:
             objective += self.variables['e'][t] * self.time_series.p_E[t]
 
-        # Final state of charge value [currency unit]
+        # Value of the state of charge the battery is left in [currency unit]
         for i, bat in enumerate(self.batteries):
-            objective += self.variables['s'][i][-1] * bat.p_a
+            for t, weight in enumerate(self._soc_value_weights(bat)):
+                if weight:
+                    objective += self.variables['s'][i][t] * weight * bat.p_a
 
         # charge for import power demand rate. The demand rate is applied to the maximum
         # power draw beyond the threshold within the time horizon.
@@ -1316,8 +1341,9 @@ class Optimizer:
         # bat.s_initial and not s[0]: s[0] is the state after the first time step and already
         # carries that step's charging, so subtracting it dropped the first step from the result.
         for i, bat in enumerate(self.batteries):
-            clean_objective += (pulp.value(self.variables['s'][i][self.T-1])
-                                - bat.s_initial) * bat.p_a
+            for t, weight in enumerate(self._soc_value_weights(bat)):
+                if weight:
+                    clean_objective += (pulp.value(self.variables['s'][i][t]) - bat.s_initial) * weight * bat.p_a
 
         # charge for import power demand rate. The demand rate is applied to the maximum
         # power draw beyond the threshold within the time horizon.
