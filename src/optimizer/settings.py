@@ -10,6 +10,11 @@ class OptimizerSettings(BaseSettings):
                                   description="Absolute MIP gap in currency units, applied to the cost stage. The solver "
                                               "stops once the remaining gap is worth less than this, one cent by default. "
                                               "Unset solves to proven optimality")
+    gap_share: float = Field(default=0.0025,
+                             description="Share of the money a request moves that the absolute gap may grow to: the "
+                                         "goal energy of its batteries at the mean import price. A fixed cent sits below "
+                                         "the slack the c_min gate leaves in the relaxation on vehicles with a charge goal, "
+                                         "see #186. Zero keeps gap_abs fixed")
     probe_seconds: float | None = Field(default=None,
                                         description="Seconds the joint solve gets before falling back to the two "
                                                     "stage split. Unset derives it from the time limit. Zero always "
