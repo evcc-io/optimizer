@@ -94,7 +94,7 @@ COST_BOUND_SLACK = 1e-5
 # big M rows put CBC's solve-time perturbation orders above any hundredth-of-a-cent slack, and
 # no algorithm switch helps (primal, dual, barrier and perturbation-off all agree). Measured on
 # two captured requests, feasibility returns at 3e-4 and 1e-3. Each retry multiplies the slack
-# by ten, so the ceiling is reached in three; it equals the default gap_abs, money the cost
+# by ten, so the ceiling is reached in three; it is half the default gap_abs, money the cost
 # stage may already have left on the table, and the alternative is no tie break at all.
 COST_BOUND_SLACK_CEILING = 1e-2
 

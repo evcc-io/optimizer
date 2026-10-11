@@ -6,9 +6,9 @@ class OptimizerSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OPTIMIZER_")
 
     num_threads: int | None = Field(default=None, description="Number of threads to use for optimization")
-    gap_abs: float | None = Field(default=0.01,
+    gap_abs: float | None = Field(default=0.02,
                                   description="Absolute MIP gap in currency units, applied to the cost stage. The solver "
-                                              "stops once the remaining gap is worth less than this, one cent by default. "
+                                              "stops once the remaining gap is worth less than this, two cents by default. "
                                               "Unset solves to proven optimality")
     gap_share: float = Field(default=0.0025,
                              description="Share of the money a request moves that the absolute gap may grow to: the "

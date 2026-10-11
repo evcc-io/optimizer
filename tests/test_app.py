@@ -12,7 +12,10 @@ from optimizer.app import app, settings
 
 
 @pytest.mark.parametrize('test_case', pathlib.Path('test_cases').glob('*.json'))
-def test_optimizer(test_case: pathlib.Path):
+def test_optimizer(test_case: pathlib.Path, monkeypatch):
+    # stored objectives are proven optima. The production gap may stop a cent or two short of
+    # them, 020 lands 1.2 ct below at 2 ct, so compare at the one cent they were recorded with
+    monkeypatch.setenv("OPTIMIZER_GAP_ABS", "0.01")
     client = app.test_client()
 
     test_data = json.loads(test_case.read_text())
