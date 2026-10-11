@@ -1,5 +1,7 @@
 import os
 import re
+import signal
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -7,9 +9,11 @@ from math import isfinite
 from tempfile import TemporaryDirectory
 from typing import Dict, List, Optional
 
+import highspy
 import numpy as np
 import pulp
 
+from .processes import solver_pids
 from .settings import OptimizerSettings
 
 
@@ -154,6 +158,12 @@ PREFERENCE_TIME_SHARE = 0.25
 # both count as proven, the way pulp 3 read them.
 PROVEN = (pulp.LpSolveStatus.Optimal, pulp.LpSolveStatus.GapLimit)
 
+# wall clock past a solve's time limit after which it is cut off: CBC is killed, HiGHS
+# interrupted. CBC checks -sec in branch and bound but not reliably in presolve, the root LP
+# and the cut loop, and on the continuity candidate it ran 5 to 13 times over a 1 s limit in
+# production (#194). A run that ends normally finishes within a few tenths of its limit.
+CUTOFF_MARGIN = 0.5
+
 # reported status per pulp status when the solver returned no schedule. Every limit the solver
 # stopped on without a schedule is a Not Solved, the reason is not part of the API.
 STATUS_LABELS = {
@@ -281,6 +291,8 @@ class Optimizer:
         # how the solve whose schedule sits in the variables ended. A stage that discards what it
         # got restores the stats of the schedule it falls back to along with the values.
         self.stats: pulp.LpSolveStats | None = None
+        # (deadline, event) while _hard_limit runs a HiGHS solve, read by its interrupt callback
+        self._cutoff = None
         # wall clock per stage of the last solve(), keyed build/probe/cost/tie_break. What the
         # response time was spent on, where the access log only carries the total.
         self.stage_seconds = {}
@@ -806,13 +818,84 @@ class Optimizer:
                                  * (1 - self.variables['z_cd'][i][t]))
 
     def _solver(self, tmpdir, **options):
-        """CBC with the shared settings, writing its scratch files to tmpdir."""
+        """The configured solver with the shared settings. CBC writes its scratch files to tmpdir."""
+        if self.settings.solver == 'highs':
+            # the cost stage reads its gap from the stats, not a CBC log, see _stage_gap
+            options.pop('logPath', None)
+            # HiGHS also stops at a relative gap of 1e-4 by default, CBC only on the absolute one
+            options.setdefault('gapRel', 0)
+            if self._cutoff is not None:
+                types = highspy.cb.HighsCallbackType
+                options.update(callbackTuple=(self._interrupt, None),
+                               callbacksToActivate=[types.kCallbackMipInterrupt, types.kCallbackSimplexInterrupt,
+                                                    types.kCallbackIpmInterrupt])
+            return pulp.HiGHS(msg=False, threads=self.settings.num_threads, **options)
+
         # pulp resolves the binary unless one is configured: a cbc on PATH, the 2.10 release build
         # the image installs. The cbcbox wheel of the pulp cbc extra is deliberately not used, its
         # devel build solves the captured requests 1.5 to 3 times slower
         solver = pulp.COIN_CMD(path=self.settings.cbc_path, msg=0, threads=self.settings.num_threads, **options)
         solver.tmpDir = tmpdir
         return solver
+
+    def _interrupt(self, callback_type, message, data_out, data_in, user_data):
+        """HiGHS interrupt callback: stop the solve once the _hard_limit deadline has passed.
+
+        HiGHS returns its incumbent with status Interrupted, has_solution saying whether it had one.
+        """
+        deadline, interrupted = self._cutoff
+        if time.monotonic() >= deadline:
+            data_in.user_interrupt = True
+            interrupted.set()
+
+    @contextmanager
+    def _hard_limit(self, seconds: float):
+        """Cut the enclosed solve off once it is still running after `seconds`, by wall clock.
+
+        Yields an event that is set if it was cut off. HiGHS is interrupted through its callback and
+        keeps its incumbent. CBC is killed: PuLP waits on it without a timeout, killing it makes
+        PuLP raise PulpSolverError, which the caller handles. Without procfs (a development machine)
+        no cbc is found and nothing is killed.
+        """
+        cut = threading.Event()
+        if self.settings.solver == 'highs':
+            self._cutoff = (time.monotonic() + seconds, cut)
+            try:
+                yield cut
+            finally:
+                self._cutoff = None
+            return
+
+        def kill():
+            for pid in solver_pids(os.getpid()):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                    cut.set()
+                except OSError:
+                    pass  # it finished on its own in the meantime
+
+        timer = threading.Timer(seconds, kill)
+        timer.daemon = True
+        timer.start()
+        try:
+            yield cut
+        finally:
+            timer.cancel()
+
+    def _stage_gap(self, stats, log_path, scale) -> float | None:
+        """Distance between the cost stage's schedule and the solver's bound, in currency."""
+        if self.settings.solver != 'highs':
+            return self._cbc_gap(log_path, scale)
+        # pulp 4 leaves best_bound unset for HiGHS, the solver model has it. A proven solve has
+        # nothing left open, the way CBC's log prints no bound for one
+        if not stats.has_solution:
+            return None
+        if stats.status in PROVEN:
+            return 0.
+        info = self.problem.solverModel.getInfo()
+        if not (isfinite(info.objective_function_value) and isfinite(info.mip_dual_bound)):
+            return None
+        return abs(info.mip_dual_bound - info.objective_function_value) / scale
 
     @contextmanager
     def _timed(self, stage):
@@ -1030,7 +1113,7 @@ class Optimizer:
                 if remaining <= 0:
                     self.continuity_stage = 'no time'
                     return
-            with self._timed('continuity'):
+            with self._timed('continuity'), self._hard_limit(remaining + CUTOFF_MARGIN) as cut:
                 stats = candidate.solve(self._solver(tmpdir, timeLimit=remaining))
             self.continuity_stage = 'MILP ' + stats.status_str + ' unused'
             if not stats.has_solution or not _complete_solution(candidate):
@@ -1053,7 +1136,7 @@ class Optimizer:
             if improved:
                 self.continuity_stage = f'improved {sum(before)} to {sum(after)}'
         except pulp.PulpSolverError:
-            self.continuity_stage = 'solver error'
+            self.continuity_stage = 'killed at the limit' if cut.is_set() else 'solver error'
         finally:
             if not improved:
                 for var, value in solution.items():
@@ -1188,7 +1271,7 @@ class Optimizer:
         log_path = os.path.join(tmpdir, 'cost.log')
         with self._timed('cost'):
             self.stats = self.problem.solve(self._solver(tmpdir, timeLimit=remaining, logPath=log_path, gapAbs=scaled_gap))
-        self.cost_stage_gap = self._cbc_gap(log_path, scale)
+        self.cost_stage_gap = self._stage_gap(self.stats, log_path, scale)
 
         if self.stats.has_solution and self._is_feasible():
             # the cost stage is allowed to stop on its gap, so proven is not required of it, only

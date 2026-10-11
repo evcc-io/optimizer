@@ -383,6 +383,27 @@ wheels = [
 ]
 
 [[package]]
+name = "highspy"
+version = "1.15.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/87/02/c6b658f79911fee921721da728b9ab8f5e19ff06121fff36f90f77127f4d/highspy-1.15.1.tar.gz", hash = "sha256:20ed2fbf1cb64bf3044ee6632364b7e2653d93e6901e2b19fd3d5df10702e8c5", size = 1703256, upload-time = "2026-07-02T12:03:25.009Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3f/1e/283ea32eac82dd24fe86c439013d7c7666f4889de89f0957362ea5fa425e/highspy-1.15.1-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:4db297486a7a42a18656d1cc0ea9e1596fe45b8f7f75669a0c55b9081531ee0a", size = 4878819, upload-time = "2026-07-02T12:02:24.668Z" },
+    { url = "https://files.pythonhosted.org/packages/7f/1c/c6518fc7c2bd5c90d86bd7a8f3cf16c1ea0ace4335a80d45b8d3f96c0cba/highspy-1.15.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:818256db731339605a7b2c31cabfcbf820fe50402ff5e9b7aa8410ead06e8735", size = 4474016, upload-time = "2026-07-02T12:02:26.572Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/97/4b5e345affc107f1f315c55dd0b6f35f13be07092feccbdfe1d9bfe38e63/highspy-1.15.1-cp313-cp313-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:383cd3f28cce0753dec8e949719b10864e068c53a485624fcab4c6b585496dd7", size = 4636833, upload-time = "2026-07-02T12:02:28.467Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/6e/f00e914f2bd88e2b73a8b3ea1b47171a85cfa23d1a06dc373ca797f43208/highspy-1.15.1-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:238b2ee88b974b21c7e9ef198139502a7d87451939cae143dce789bbda121182", size = 5034140, upload-time = "2026-07-02T12:02:30.294Z" },
+    { url = "https://files.pythonhosted.org/packages/61/03/8f821d39dc8ee06a35e0fa54c754ab592139640c1e839b587e60068ad822/highspy-1.15.1-cp313-cp313-manylinux_2_26_i686.manylinux_2_28_i686.whl", hash = "sha256:b6dcc545235c0765b48fc736122b105e174d907622d20986ac653c5b2a04911f", size = 5862229, upload-time = "2026-07-02T12:02:32.065Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/55/708b7523ad80106b91fb66471ab8b1c178a8c8adc222c839cc14147542cd/highspy-1.15.1-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:6e1f8a21a0f48aedb129a5a60d4cad9ee0767de271cd7450de16192440671b38", size = 6191747, upload-time = "2026-07-02T12:02:34.034Z" },
+    { url = "https://files.pythonhosted.org/packages/8d/cd/737f43e9c56163ebae501ab21fdbc37dd2dde3e02fd18e37d0062b9b9c7c/highspy-1.15.1-cp313-cp313-musllinux_1_2_i686.whl", hash = "sha256:9ea683af80e4fb7c9d712b5df4bae34c63fa9e6afc78d750ba2d9f5e6f3203e0", size = 7233066, upload-time = "2026-07-02T12:02:36.109Z" },
+    { url = "https://files.pythonhosted.org/packages/33/60/b9ae92e8454f42cb5c5ccca63862a75f5d43afead1f725f3b8af19f507f5/highspy-1.15.1-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:565cf6a6e7c84e36c101b118a3c5fd09bc14aeece599bba12625e79b5ab0cecb", size = 6636826, upload-time = "2026-07-02T12:02:37.863Z" },
+    { url = "https://files.pythonhosted.org/packages/54/0b/35e5e63be2e70951c3224ed33c4300f1cd37fcfe4eb6d25e259e13571e0f/highspy-1.15.1-cp313-cp313-win32.whl", hash = "sha256:6cc7008b82094b2a2377338398b38f5b6c306397bd23282e55dec46a101a2dac", size = 2306720, upload-time = "2026-07-02T12:02:39.839Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/63/2e104bab0117415c68950f249e42f0974f74665d0313dfeddceb1f74c47d/highspy-1.15.1-cp313-cp313-win_amd64.whl", hash = "sha256:46fe314b918257361c54170852bc561c78d0f84d94e2ad263859d818127e6e76", size = 2711119, upload-time = "2026-07-02T12:02:41.861Z" },
+]
+
+[[package]]
 name = "idna"
 version = "3.11"
 source = { registry = "https://pypi.org/simple" }
@@ -651,6 +672,7 @@ dependencies = [
     { name = "flask" },
     { name = "flask-restx" },
     { name = "gunicorn" },
+    { name = "highspy" },
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "pandas" },
@@ -675,6 +697,7 @@ requires-dist = [
     { name = "flask", specifier = ">=3.0.3" },
     { name = "flask-restx", specifier = ">=1.3.0" },
     { name = "gunicorn", specifier = ">=22.0.0" },
+    { name = "highspy", specifier = ">=1.15.1" },
     { name = "matplotlib" },
     { name = "numpy", specifier = ">=2.3.1" },
     { name = "pandas", specifier = ">=2.3.3" },

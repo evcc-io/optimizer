@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -6,6 +8,9 @@ class OptimizerSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OPTIMIZER_")
 
     num_threads: int | None = Field(default=None, description="Number of threads to use for optimization")
+    solver: Literal['cbc', 'highs'] = Field(default='cbc',
+                                            description="MILP solver: cbc, the CBC binary pulp resolves, or highs, HiGHS "
+                                            "in process through highspy")
     cbc_path: str | None = Field(default=None,
                                  description="CBC executable. Unset uses the one pulp resolves, a cbc on PATH")
     gap_abs: float | None = Field(default=0.02,
