@@ -1,6 +1,5 @@
 import os
 import re
-import signal
 import threading
 import time
 from contextlib import contextmanager
@@ -13,7 +12,6 @@ import highspy
 import numpy as np
 import pulp
 
-from .processes import solver_pids
 from .settings import OptimizerSettings
 
 
@@ -158,10 +156,10 @@ PREFERENCE_TIME_SHARE = 0.25
 # both count as proven, the way pulp 3 read them.
 PROVEN = (pulp.LpSolveStatus.Optimal, pulp.LpSolveStatus.GapLimit)
 
-# wall clock past a solve's time limit after which it is cut off: CBC is killed, HiGHS
-# interrupted. CBC checks -sec in branch and bound but not reliably in presolve, the root LP
-# and the cut loop, and on the continuity candidate it ran 5 to 13 times over a 1 s limit in
-# production (#194). A run that ends normally finishes within a few tenths of its limit.
+# wall clock past a HiGHS solve's time limit after which it is interrupted. The continuity
+# candidate ran 5 to 13 times over a 1 s limit on CBC in production (#194); HiGHS checks its
+# time limit itself, the interrupt is the backstop. A run that ends normally finishes within a
+# few tenths of its limit.
 CUTOFF_MARGIN = 0.5
 
 # reported status per pulp status when the solver returned no schedule. Every limit the solver
@@ -850,37 +848,20 @@ class Optimizer:
 
     @contextmanager
     def _hard_limit(self, seconds: float):
-        """Cut the enclosed solve off once it is still running after `seconds`, by wall clock.
+        """Interrupt the enclosed HiGHS solve once it is still running after `seconds`, by wall clock.
 
-        Yields an event that is set if it was cut off. HiGHS is interrupted through its callback and
-        keeps its incumbent. CBC is killed: PuLP waits on it without a timeout, killing it makes
-        PuLP raise PulpSolverError, which the caller handles. Without procfs (a development machine)
-        no cbc is found and nothing is killed.
+        Yields an event that is set if it was interrupted. HiGHS keeps its incumbent. CBC runs as a
+        separate process PuLP waits on without a timeout, so it is left to its own -sec limit.
         """
         cut = threading.Event()
-        if self.settings.solver == 'highs':
-            self._cutoff = (time.monotonic() + seconds, cut)
-            try:
-                yield cut
-            finally:
-                self._cutoff = None
+        if self.settings.solver != 'highs':
+            yield cut
             return
-
-        def kill():
-            for pid in solver_pids(os.getpid()):
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                    cut.set()
-                except OSError:
-                    pass  # it finished on its own in the meantime
-
-        timer = threading.Timer(seconds, kill)
-        timer.daemon = True
-        timer.start()
+        self._cutoff = (time.monotonic() + seconds, cut)
         try:
             yield cut
         finally:
-            timer.cancel()
+            self._cutoff = None
 
     def _stage_gap(self, stats, log_path, scale) -> float | None:
         """Distance between the cost stage's schedule and the solver's bound, in currency."""
@@ -1113,7 +1094,7 @@ class Optimizer:
                 if remaining <= 0:
                     self.continuity_stage = 'no time'
                     return
-            with self._timed('continuity'), self._hard_limit(remaining + CUTOFF_MARGIN) as cut:
+            with self._timed('continuity'), self._hard_limit(remaining + CUTOFF_MARGIN):
                 stats = candidate.solve(self._solver(tmpdir, timeLimit=remaining))
             self.continuity_stage = 'MILP ' + stats.status_str + ' unused'
             if not stats.has_solution or not _complete_solution(candidate):
@@ -1136,7 +1117,7 @@ class Optimizer:
             if improved:
                 self.continuity_stage = f'improved {sum(before)} to {sum(after)}'
         except pulp.PulpSolverError:
-            self.continuity_stage = 'killed at the limit' if cut.is_set() else 'solver error'
+            self.continuity_stage = 'solver error'
         finally:
             if not improved:
                 for var, value in solution.items():
