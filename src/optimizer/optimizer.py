@@ -12,6 +12,7 @@ import highspy
 import numpy as np
 import pulp
 
+from .highs import BulkHiGHS
 from .settings import OptimizerSettings
 
 
@@ -827,7 +828,7 @@ class Optimizer:
                 options.update(callbackTuple=(self._interrupt, None),
                                callbacksToActivate=[types.kCallbackMipInterrupt, types.kCallbackSimplexInterrupt,
                                                     types.kCallbackIpmInterrupt])
-            return pulp.HiGHS(msg=False, threads=self.settings.num_threads, **options)
+            return BulkHiGHS(msg=False, threads=self.settings.num_threads, **options)
 
         # pulp resolves the binary unless one is configured: a cbc on PATH, the 2.10 release build
         # the image installs. The cbcbox wheel of the pulp cbc extra is deliberately not used, its
