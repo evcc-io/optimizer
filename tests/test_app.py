@@ -166,7 +166,8 @@ def test_every_request_logs_a_solve_line(capsys):
     # so renaming one breaks production attribution silently
     request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
     client = app.test_client()
-    client.post("/optimize/charge-schedule", json=request, headers={"User-Agent": "evcc/0.311.1"})
+    # the line is printed once the response is closed, so it can time sending it (#193)
+    client.post("/optimize/charge-schedule", json=request, headers={"User-Agent": "evcc/0.311.1"}).close()
 
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()
              if line.startswith('{"solve"')]
@@ -177,6 +178,12 @@ def test_every_request_logs_a_solve_line(capsys):
     assert solve["elapsed"] > 0
     assert solve["stages"] and set(solve["stages"]) <= {"build", "probe", "cost", "tie_break", "continuity"}
     assert solve["steps"] == len(request["time_series"]["dt"])
+    # receiving, validating, solving and responding, to tell a slow client from a slow solve (#193).
+    # Parsing the payload and building the model fall between validate and the solve, so the
+    # phases account for no more than the total, which lines up with the access log
+    phases = ("read", "validate", "elapsed", "respond")
+    assert all(solve[phase] >= 0 for phase in phases)
+    assert sum(solve[phase] for phase in phases) <= solve["total"] + 0.002
 
 
 def test_abort_returns_json_message():
