@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timezone
 
 import jwt
-from flask import Flask, jsonify, request
+from flask import Flask, after_this_request, g, jsonify, request
 from flask_restx import Api, Resource, fields
 from werkzeug.exceptions import BadRequest
 
@@ -39,6 +39,18 @@ def before_request_func():
             return jsonify({"message": "Invalid token"}), 401
         except Exception as e:
             return jsonify({"message": str(e)}), 401
+
+
+@app.before_request
+def read_body():
+    """Receive the body up front, timed, so the request log can tell a slow client from a slow
+    solve (#193). The sync worker reads it from the socket itself, and the ingress streams it
+    rather than buffering, so a client trickling its upload holds the replica's only worker.
+    Registered after the auth check, which ends the request first when it fails.
+    """
+    g.started = time.perf_counter()
+    request.get_data(cache=True)
+    g.read = time.perf_counter() - g.started
 
 
 def money(value):
@@ -200,6 +212,8 @@ class OptimizeCharging(Resource):
         This endpoint solves a Mixed Integer Linear Programming problem to optimize
         EV charging schedules considering battery constraints, grid prices, and energy demands.
         """
+        # schema validation ran before this handler, between the body read and here
+        validated = time.perf_counter()
         try:
             data = api.payload
 
@@ -260,6 +274,9 @@ class OptimizeCharging(Resource):
                     *lengths['p_demand'], *lengths['s_goal']}) > 1:
                 api.abort(400, "All time series must have the same length", lengths=lengths)
 
+            if lengths['dt'] == 0:
+                api.abort(400, "Time series must not be empty")
+
         except BadRequest:
             raise
         except Exception as e:
@@ -285,8 +302,10 @@ class OptimizeCharging(Resource):
             # solve stages. The access log only carries the total.
             # evcc stamps its version on every request as evcc/<version>, so a change in the
             # solve mix can be read against the release that sent it
-            print(json.dumps({"solve": {
+            line = {
                 "client": request.headers.get('User-Agent'),
+                "read": round(g.read, 3),
+                "validate": round(validated - g.started - g.read, 3),
                 "elapsed": round(elapsed, 3),
                 "stages": optimizer.stage_seconds,
                 "path": optimizer.solve_path,
@@ -296,7 +315,20 @@ class OptimizeCharging(Resource):
                 "cost_stage_gap": money(optimizer.cost_stage_gap),
                 "status": result.get('status'),
                 "steps": optimizer.T,
-            }}), flush=True)
+            }
+            started, solved = g.started, time.perf_counter()
+
+            # printed once the response is written, so respond covers marshalling and sending it,
+            # and total lines up with the access log's %(D)s (#193). The request context, and g
+            # with it, is gone by then.
+            @after_this_request
+            def log_on_close(response):
+                def log():
+                    now = time.perf_counter()
+                    line.update(respond=round(now - solved, 3), total=round(now - started, 3))
+                    print(json.dumps({"solve": line}), flush=True)
+                response.call_on_close(log)
+                return response
 
             dump_slow_request(data, elapsed, optimizer.cost_stage_gap)
             return result
