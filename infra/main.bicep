@@ -94,6 +94,11 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
             // one vCPU replica at the price of a worse schedule for a small share of them.
             { name: 'OPTIMIZER_TIME_LIMIT', value: '10' }
             { name: 'OPTIMIZER_NUM_THREADS', value: '1' }
+            // CBC for the joint probe, HiGHS for the split stages (#199). Pure HiGHS proved 15 % of
+            // the mid-size requests 2.5-5x slower, overran the probe and lifted p99 from 6.4 to 8.5 s
+            // in production; the hybrid keeps CBC's probe times and HiGHS's split stages, which cut
+            // the requests returned without a schedule from 1.3 % to 0.1 %.
+            { name: 'OPTIMIZER_SOLVER', value: 'hybrid' }
             // the dump threshold is the time limit, so this collects everything above 10 s now.
             // The file is ephemeral, a replica restart takes it with it.
             { name: 'OPTIMIZER_DUMP_SLOW_REQUESTS', value: '/tmp/slow-requests.jsonl' }
