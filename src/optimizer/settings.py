@@ -8,9 +8,10 @@ class OptimizerSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OPTIMIZER_")
 
     num_threads: int | None = Field(default=None, description="Number of threads to use for optimization")
-    solver: Literal['cbc', 'highs'] = Field(default='cbc',
-                                            description="MILP solver: cbc, the CBC binary pulp resolves, or highs, HiGHS "
-                                            "in process through highspy")
+    solver: Literal['cbc', 'highs', 'hybrid'] = Field(default='cbc',
+                                                      description="MILP solver: cbc, the CBC binary pulp resolves; highs, HiGHS "
+                                                      "in process through highspy; or hybrid, CBC for the joint probe and "
+                                                      "HiGHS for the cost, tie break and continuity stages")
     cbc_path: str | None = Field(default=None,
                                  description="CBC executable. Unset uses the one pulp resolves, a cbc on PATH")
     gap_abs: float | None = Field(default=0.02,

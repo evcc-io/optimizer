@@ -292,6 +292,8 @@ class Optimizer:
         self.stats: pulp.LpSolveStats | None = None
         # (deadline, event) while _hard_limit runs a HiGHS solve, read by its interrupt callback
         self._cutoff = None
+        # the stage _timed is running, what _stage_solver picks the solver by
+        self._stage = None
         # wall clock per stage of the last solve(), keyed build/probe/cost/tie_break. What the
         # response time was spent on, where the access log only carries the total.
         self.stage_seconds = {}
@@ -816,9 +818,24 @@ class Optimizer:
                 self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
                                  * (1 - self.variables['z_cd'][i][t]))
 
+    def _stage_solver(self) -> str:
+        """The solver of the stage being timed: hybrid proves the joint probe on CBC and runs the rest on HiGHS.
+
+        Of 54 captured requests CBC proves joint in 1 to 5 s, HiGHS needs 2.5 to 5 times longer on 8 and
+        overruns the 2 s probe into a 6 to 8 s split: production p99 went from 6.4 to 8.5 s on HiGHS alone.
+        On the split stages HiGHS is the better solver, 11 CBC Not Solved on the slow captures become 9
+        Optimal and 2 Feasible, so each stage gets the solver that wins it. Nothing is handed between
+        the stages but variable values, so switching loses no warm start. The CBC probe is left to its
+        -sec: it ran past the 2 s on 55 % of the split requests, by up to 1.9 s, max 3.9 s, not the 5 to
+        13 times of the continuity candidate (#194).
+        """
+        if self.settings.solver == 'hybrid':
+            return 'cbc' if self._stage == 'probe' else 'highs'
+        return self.settings.solver
+
     def _solver(self, tmpdir, **options):
-        """The configured solver with the shared settings. CBC writes its scratch files to tmpdir."""
-        if self.settings.solver == 'highs':
+        """The solver of the current stage with the shared settings. CBC writes its scratch files to tmpdir."""
+        if self._stage_solver() == 'highs':
             # the cost stage reads its gap from the stats, not a CBC log, see _stage_gap
             options.pop('logPath', None)
             # HiGHS also stops at a relative gap of 1e-4 by default, CBC only on the absolute one
@@ -855,7 +872,7 @@ class Optimizer:
         separate process PuLP waits on without a timeout, so it is left to its own -sec limit.
         """
         cut = threading.Event()
-        if self.settings.solver != 'highs':
+        if self._stage_solver() != 'highs':
             yield cut
             return
         self._cutoff = (time.monotonic() + seconds, cut)
@@ -866,7 +883,7 @@ class Optimizer:
 
     def _stage_gap(self, stats, log_path, scale) -> float | None:
         """Distance between the cost stage's schedule and the solver's bound, in currency."""
-        if self.settings.solver != 'highs':
+        if self._stage_solver() != 'highs':
             return self._cbc_gap(log_path, scale)
         # pulp 4 leaves best_bound unset for HiGHS, the solver model has it. A proven solve has
         # nothing left open, the way CBC's log prints no bound for one
@@ -883,8 +900,10 @@ class Optimizer:
     def _timed(self, stage):
         """Add the wall clock of the enclosed block to stage_seconds.
 
-        Accumulating rather than assigning, because the tie break is two solves under one name.
+        Accumulating rather than assigning, because the tie break is two solves under one name. The
+        stage stays set after the block, _stage_gap reads the cost stage's solver once it has ended.
         """
+        self._stage = stage
         started = time.monotonic()
         try:
             yield
