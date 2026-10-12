@@ -146,8 +146,9 @@ PROBE_SHARE = 0.2
 #
 # Sized to seat the stage and no more: a reserve too small to seat it is worse than none, idle
 # time the cost stage could have used, and a reserve larger than the stage can spend is the same
-# idle time on the other side. The MILP tie break is capped at MILP_PREFERENCE_TIME_LIMIT, so 0.25
-# of the production 10 s limit is exactly that cap and the LP floors fit in the margin. This was
+# idle time on the other side. The MILP tie break is capped at MILP_PREFERENCE_TIME_LIMIT; 0.25 of
+# the production 10 s limit seated that cap at 2.5 s with the LP floors in the margin, and what
+# the lower cap leaves of the slice returns as response time. This was
 # 0.4 before the cap existed, and production paid for it: the revision that introduced the reserve
 # alone moved p95 from 0.99 s to 1.41 s with the share of solves at the 10 s limit unchanged.
 PREFERENCE_TIME_SHARE = 0.25
@@ -173,12 +174,13 @@ STATUS_LABELS = {
 
 # clock the tie break MILP may spend. Distinct from PREFERENCE_TIME_SHARE, which is what the
 # cost stage may not eat: the reserve seats the stage, this caps its spend. Measured over 16
-# captured production splits, the MILP finds everything it will find within 2.5 s - capping
-# there returned the identical preference value on 15 of 16, the 16th lost 1.7e-6, and every
-# deep tail request got the rest of its 4 s slice back as response time. The first incumbent
-# lands around 1.3 s and the 245 step model seats in 1.6 s, so 2.5 keeps margin over both.
-# Requests without a time limit stay uncapped, they asked to be solved out.
-MILP_PREFERENCE_TIME_LIMIT = 2.5
+# captured production splits on CBC, the MILP found everything it would find within 2.5 s. On
+# HiGHS the stage is the one that hits its cap: 44 of 53 benchmark splits ran the full 2.5 s and
+# ended 'TimeLimit unused', and production logged the cap on 0.66 percent of hybrid requests
+# against 0.03 percent on CBC. Capping at 1 s cut the mixed benchmark's sum by 13 percent and
+# p95 from 8.7 to 7.2 s with the preference value unchanged beyond seed noise (1 worse, 1 better
+# of 170). Requests without a time limit stay uncapped, they asked to be solved out.
+MILP_PREFERENCE_TIME_LIMIT = 1.0
 
 # clock the cost stage may spend on a split. Absolute rather than what the reserve leaves of the
 # limit: the stage is anytime branch and bound and consumes whatever it is offered, so on the
