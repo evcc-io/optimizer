@@ -161,7 +161,7 @@ def test_requests_with_an_open_gap_are_dumped(tmp_path, monkeypatch):
 
 def test_infeasible_requests_are_dumped_with_their_subject(tmp_path, monkeypatch):
     # production sees a few installations send a contradictory model every 15 minutes; the dump
-    # names the account so the input can be fixed where it comes from
+    # names the account and the evcc release so the input can be fixed where it comes from
     request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
     request["batteries"][0]["s_initial"] = request["batteries"][0]["s_max"] + 1000   # more energy than the battery holds
     dump = tmp_path / "infeasible.jsonl"
@@ -170,12 +170,14 @@ def test_infeasible_requests_are_dumped_with_their_subject(tmp_path, monkeypatch
     token = jwt.encode({"sub": "someone"}, "test-secret", algorithm="HS256")
     client = app.test_client()
 
-    body = client.post("/optimize/charge-schedule", json=request, headers={"Authorization": f"Bearer {token}"}).json
+    body = client.post("/optimize/charge-schedule", json=request,
+                       headers={"Authorization": f"Bearer {token}", "User-Agent": "evcc/0.317.0"}).json
     assert body["status"] == "Infeasible"
 
     line = json.loads(dump.read_text())
     assert line["status"] == "Infeasible"
     assert line["subject"] == "someone"
+    assert line["client"] == "evcc/0.317.0"
     assert line["request"] == request
 
 

@@ -66,7 +66,7 @@ def money(value):
 DUMP_GAP = 1.0
 
 
-def dump_slow_request(payload, elapsed, gap, status=None, subject=None):
+def dump_slow_request(payload, elapsed, gap, status=None, subject=None, client=None):
     """Persist requests worth replaying: those that exhausted the solver time limit, those the
     cost stage left more than DUMP_GAP of money unproven on, and those the model rejects as
     infeasible.
@@ -76,7 +76,9 @@ def dump_slow_request(payload, elapsed, gap, status=None, subject=None):
 
     An infeasible model is contradictory input, not a slow solve: both stages refuse it within
     a few tenths of a second, and in production it is a handful of installations sending the same
-    request every 15 minutes. The dump carries the token subject so the account can be told.
+    request every 15 minutes. The dump carries the token subject so the account can be told, and
+    the client's User-Agent, evcc/<version>, so a bad request can be tied to the release that
+    built it.
     """
     path, limit = settings.dump_slow_requests, settings.time_limit
     slow = limit is not None and elapsed >= limit
@@ -89,7 +91,7 @@ def dump_slow_request(payload, elapsed, gap, status=None, subject=None):
     # can be replayed by the existing harness
     line = json.dumps({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                        "elapsed": round(elapsed, 3), "gap": money(gap), "status": status,
-                       "subject": subject, "request": payload}) + "\n"
+                       "subject": subject, "client": client, "request": payload}) + "\n"
     try:
         pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a") as f:
@@ -339,7 +341,8 @@ class OptimizeCharging(Resource):
                 response.call_on_close(log)
                 return response
 
-            dump_slow_request(data, elapsed, optimizer.cost_stage_gap, result.get('status'), g.get('subject'))
+            dump_slow_request(data, elapsed, optimizer.cost_stage_gap, result.get('status'), g.get('subject'),
+                              request.headers.get('User-Agent'))
             return result
 
         except Exception as e:
