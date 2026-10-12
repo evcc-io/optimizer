@@ -35,5 +35,5 @@ class OptimizerSettings(BaseSettings):
     log_subject: bool = Field(default=False, description="Log the JWT subject of every request. Off by default, it names accounts in the logs")
     dump_slow_requests: str | None = Field(default=None,
                                            description="JSON Lines file requests that exhaust the solver time limit, leave more than one currency "
-                                                       "unit unproven in the cost stage, or come back infeasible are appended to, with the token "
+                                                       "unit unproven in the cost stage, or come back without a schedule are appended to, with the token "
                                                        "subject. Unset disables the dump")

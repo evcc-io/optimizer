@@ -181,6 +181,29 @@ def test_infeasible_requests_are_dumped_with_their_subject(tmp_path, monkeypatch
     assert line["request"] == request
 
 
+def test_unsolved_requests_are_dumped(tmp_path, monkeypatch):
+    # a Not Solved burns the probe and cost stage caps and returns nothing, well short of the time
+    # limit; the dump is the only record of what was asked. The status is simulated rather than
+    # provoked, see test_unproved_solutions_report_feasible for why
+    original = pulp.LpProblem.solve
+
+    def stopped_without_incumbent(self, *args, **kwargs):
+        return dataclasses.replace(original(self, *args, **kwargs), status=pulp.LpSolveStatus.TimeLimit, has_solution=False)
+
+    request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
+    dump = tmp_path / "unsolved.jsonl"
+    monkeypatch.setattr(settings, "dump_slow_requests", str(dump))
+    monkeypatch.setattr(pulp.LpProblem, "solve", stopped_without_incumbent)
+    client = app.test_client()
+
+    body = client.post("/optimize/charge-schedule", json=request).json
+    assert body["status"] == "Not Solved"
+
+    line = json.loads(dump.read_text())
+    assert line["status"] == "Not Solved"
+    assert line["request"] == request
+
+
 def test_every_request_logs_a_solve_line(capsys):
     # the key names are the Log Analytics contract: the dashboard's KQL queries parse this line,
     # so renaming one breaks production attribution silently

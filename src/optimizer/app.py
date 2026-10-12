@@ -68,23 +68,25 @@ DUMP_GAP = 1.0
 
 def dump_slow_request(payload, elapsed, gap, status=None, subject=None, client=None):
     """Persist requests worth replaying: those that exhausted the solver time limit, those the
-    cost stage left more than DUMP_GAP of money unproven on, and those the model rejects as
-    infeasible.
+    cost stage left more than DUMP_GAP of money unproven on, and those that came back without a
+    schedule: infeasible, or not solved within the stage caps.
 
     The elapsed time covers model building as well as solving, so a request that only exceeds
     the limit while building is caught too. That one is equally worth looking at.
 
     An infeasible model is contradictory input, not a slow solve: both stages refuse it within
     a few tenths of a second, and in production it is a handful of installations sending the same
-    request every 15 minutes. The dump carries the token subject so the account can be told, and
-    the client's User-Agent, evcc/<version>, so a bad request can be tied to the release that
-    built it.
+    request every 15 minutes. A Not Solved ran the probe and the cost stage to their caps, about
+    5 s, and still had no incumbent; nine of ten in production came from one installation sending
+    400 to 480 step horizons. Neither reaches the time limit, so neither was caught as slow. The
+    dump carries the token subject so the account can be told, and the client's User-Agent,
+    evcc/<version>, so a bad request can be tied to the release that built it.
     """
     path, limit = settings.dump_slow_requests, settings.time_limit
     slow = limit is not None and elapsed >= limit
     unproven = gap is not None and gap > DUMP_GAP
-    infeasible = status == 'Infeasible'
-    if not path or not (slow or unproven or infeasible):
+    unsolved = status not in (None, 'Optimal', 'Feasible')
+    if not path or not (slow or unproven or unsolved):
         return
 
     # one line per request, carrying the same "request" key as test_cases/*.json so a line
