@@ -31,8 +31,10 @@ def before_request_func():
                 return jsonify({"message": "Invalid token type"}), 401
 
             payload = jwt.decode(token, secret_key, algorithms=["HS256"])
+            # kept for the request dump, which names the account behind a request worth a look
+            g.subject = payload.get('sub')
             if settings.log_subject:
-                print("subject:", payload.get('sub'))
+                print("subject:", g.subject)
         except jwt.ExpiredSignatureError:
             return jsonify({"message": "Token has expired"}), 401
         except jwt.InvalidTokenError:
@@ -64,23 +66,30 @@ def money(value):
 DUMP_GAP = 1.0
 
 
-def dump_slow_request(payload, elapsed, gap):
-    """Persist requests worth replaying: those that exhausted the solver time limit, and those
-    the cost stage left more than DUMP_GAP of money unproven on.
+def dump_slow_request(payload, elapsed, gap, status=None, subject=None):
+    """Persist requests worth replaying: those that exhausted the solver time limit, those the
+    cost stage left more than DUMP_GAP of money unproven on, and those the model rejects as
+    infeasible.
 
     The elapsed time covers model building as well as solving, so a request that only exceeds
     the limit while building is caught too. That one is equally worth looking at.
+
+    An infeasible model is contradictory input, not a slow solve: both stages refuse it within
+    a few tenths of a second, and in production it is a handful of installations sending the same
+    request every 15 minutes. The dump carries the token subject so the account can be told.
     """
     path, limit = settings.dump_slow_requests, settings.time_limit
     slow = limit is not None and elapsed >= limit
     unproven = gap is not None and gap > DUMP_GAP
-    if not path or not (slow or unproven):
+    infeasible = status == 'Infeasible'
+    if not path or not (slow or unproven or infeasible):
         return
 
     # one line per request, carrying the same "request" key as test_cases/*.json so a line
     # can be replayed by the existing harness
     line = json.dumps({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                       "elapsed": round(elapsed, 3), "gap": money(gap), "request": payload}) + "\n"
+                       "elapsed": round(elapsed, 3), "gap": money(gap), "status": status,
+                       "subject": subject, "request": payload}) + "\n"
     try:
         pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a") as f:
@@ -330,7 +339,7 @@ class OptimizeCharging(Resource):
                 response.call_on_close(log)
                 return response
 
-            dump_slow_request(data, elapsed, optimizer.cost_stage_gap)
+            dump_slow_request(data, elapsed, optimizer.cost_stage_gap, result.get('status'), g.get('subject'))
             return result
 
         except Exception as e:
