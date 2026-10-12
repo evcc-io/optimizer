@@ -44,6 +44,18 @@ def before_request_func():
 
 
 @app.before_request
+def refuse_blocked_clients():
+    """Turn away releases known to send requests the solver cannot serve, before the body is read
+    or a model is built. Registered after the auth check so an unauthenticated caller learns
+    nothing about the list.
+    """
+    blocked = [c.strip() for c in settings.blocked_clients.split(',') if c.strip()]
+    client = request.headers.get('User-Agent', '')
+    if client in blocked:
+        return jsonify({"message": f"{client} is no longer served, please upgrade evcc"}), 426
+
+
+@app.before_request
 def read_body():
     """Receive the body up front, timed, so the request log can tell a slow client from a slow
     solve (#193). The sync worker reads it from the socket itself, and the ingress streams it

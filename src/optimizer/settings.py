@@ -33,6 +33,10 @@ class OptimizerSettings(BaseSettings):
                                                  "only choose between equally priced schedules, see #114")
     time_limit: float | None = Field(default=None, description="Time limit for the optimization process in seconds")
     log_subject: bool = Field(default=False, description="Log the JWT subject of every request. Off by default, it names accounts in the logs")
+    blocked_clients: str = Field(default="evcc/0.304.1",
+                                 description="Comma separated User-Agents answered with 426 Upgrade Required instead of a solve. "
+                                             "evcc 0.304.1 sends 400 to 480 step horizons the solver cannot close: 65 percent of its "
+                                             "requests came back Not Solved after burning the probe and cost stage caps")
     dump_slow_requests: str | None = Field(default=None,
                                            description="JSON Lines file requests that exhaust the solver time limit, leave more than one currency "
                                                        "unit unproven in the cost stage, or come back without a schedule are appended to, with the token "

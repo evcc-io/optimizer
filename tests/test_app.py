@@ -204,6 +204,19 @@ def test_unsolved_requests_are_dumped(tmp_path, monkeypatch):
     assert line["request"] == request
 
 
+def test_blocked_clients_are_refused_before_solving(capsys, monkeypatch):
+    request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
+    client = app.test_client()
+
+    response = client.post("/optimize/charge-schedule", json=request, headers={"User-Agent": "evcc/0.304.1"})
+    assert response.status_code == 426
+    assert "upgrade" in response.json["message"]
+    assert '{"solve"' not in capsys.readouterr().out, "a refused request must not reach the solver"
+
+    monkeypatch.setattr(settings, "blocked_clients", "")
+    assert client.post("/optimize/charge-schedule", json=request, headers={"User-Agent": "evcc/0.304.1"}).status_code == 200
+
+
 def test_every_request_logs_a_solve_line(capsys):
     # the key names are the Log Analytics contract: the dashboard's KQL queries parse this line,
     # so renaming one breaks production attribution silently
