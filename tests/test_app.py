@@ -209,8 +209,9 @@ def test_blocked_clients_are_refused_before_solving(capsys, monkeypatch):
     client = app.test_client()
 
     response = client.post("/optimize/charge-schedule", json=request, headers={"User-Agent": "evcc/0.304.1"})
-    assert response.status_code == 426
-    assert "upgrade" in response.json["message"]
+    # 400 carries the message into evcc's log, which decodes the Error body for 400 and 500 only
+    assert response.status_code == 400
+    assert response.json["message"] == "evcc/0.304.1 is no longer served, please upgrade evcc"
     assert '{"solve"' not in capsys.readouterr().out, "a refused request must not reach the solver"
 
     monkeypatch.setattr(settings, "blocked_clients", "")

@@ -48,11 +48,14 @@ def refuse_blocked_clients():
     """Turn away releases known to send requests the solver cannot serve, before the body is read
     or a model is built. Registered after the auth check so an unauthenticated caller learns
     nothing about the list.
+
+    Answered as 400 with the API's Error object rather than 426: evcc decodes the body for 400 and
+    500 only and logs the message, any other status reaches its log as a bare 'invalid status'.
     """
     blocked = [c.strip() for c in settings.blocked_clients.split(',') if c.strip()]
     client = request.headers.get('User-Agent', '')
     if client in blocked:
-        return jsonify({"message": f"{client} is no longer served, please upgrade evcc"}), 426
+        return jsonify({"message": f"{client} is no longer served, please upgrade evcc"}), 400
 
 
 @app.before_request
