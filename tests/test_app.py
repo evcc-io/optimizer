@@ -161,11 +161,17 @@ def test_requests_with_an_open_gap_are_dumped(tmp_path, monkeypatch):
 
 def test_infeasible_requests_are_dumped_with_their_subject(tmp_path, monkeypatch):
     # production sees a few installations send a contradictory model every 15 minutes; the dump
-    # names the account and the evcc release so the input can be fixed where it comes from
+    # names the account and the evcc release so the input can be fixed where it comes from. The
+    # known contradictions are rejected with a 400 before solving, so the status is simulated
+    original = pulp.LpProblem.solve
+
+    def infeasible(self, *args, **kwargs):
+        return dataclasses.replace(original(self, *args, **kwargs), status=pulp.LpSolveStatus.Infeasible, has_solution=False)
+
     request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
-    request["batteries"][0]["s_initial"] = request["batteries"][0]["s_max"] + 1000   # more energy than the battery holds
     dump = tmp_path / "infeasible.jsonl"
     monkeypatch.setattr(settings, "dump_slow_requests", str(dump))
+    monkeypatch.setattr(pulp.LpProblem, "solve", infeasible)
     monkeypatch.setenv("JWT_TOKEN_SECRET", "test-secret")
     token = jwt.encode({"sub": "someone"}, "test-secret", algorithm="HS256")
     client = app.test_client()

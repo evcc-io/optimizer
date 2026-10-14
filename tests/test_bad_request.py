@@ -118,8 +118,8 @@ def test_client_version_is_logged(payload, capsys):
     assert json.loads(capsys.readouterr().out)['bad_request']['client'] == 'evcc/0.308.1'
 
 
-@pytest.mark.parametrize('field', ['c_min', 'c_max', 'd_max'])
-def test_negative_power_limit_names_the_field(payload, field, capsys):
+@pytest.mark.parametrize('field', ['c_min', 'c_max', 'd_max', 's_min', 's_max', 's_initial', 's_capacity'])
+def test_negative_limit_names_the_field(payload, field, capsys):
     # a negative d_max gave the discharge variable an empty domain and the request came back
     # as a bare Infeasible, see evcc-io/optimizer#209
     payload['batteries'][0][field] = -1700
@@ -140,6 +140,19 @@ def test_c_min_above_c_max_is_rejected(payload):
     assert response.json == {
         'message': 'Minimum charge power must not exceed maximum charge power',
         'details': {'batteries.0.c_min': '6000 exceeds c_max 5000'},
+    }
+
+
+def test_s_initial_above_capacity_is_rejected(payload):
+    # s is bounded by s_capacity, so a start above it has no feasible state
+    payload['batteries'][0]['s_initial'] = 12000
+
+    response = app.test_client().post('/optimize/charge-schedule', json=payload)
+
+    assert response.status_code == 400
+    assert response.json == {
+        'message': 'Initial state of charge must not exceed capacity',
+        'details': {'batteries.0.s_initial': '12000 exceeds s_capacity 10000'},
     }
 
 

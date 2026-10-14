@@ -173,10 +173,10 @@ grid_model = api.model('GridConfig', {
 battery_config_model = api.model('BatteryConfig', {
     'charge_from_grid': fields.Boolean(required=False, description='Controls whether the battery can be charged from the grid.'),
     'discharge_to_grid': fields.Boolean(required=False, description='Controls whether the battery can discharge to grid.'),
-    's_capacity': fields.Float(required=False, description='Capacity at 100% state of charge (Wh)'),
-    's_min': fields.Float(required=True, description='Minimum state of charge (Wh)'),
-    's_max': fields.Float(required=True, description='Maximum state of charge (Wh)'),
-    's_initial': fields.Float(required=True, description='Initial state of charge (Wh)'),
+    's_capacity': fields.Float(required=False, min=0, description='Capacity at 100% state of charge (Wh)'),
+    's_min': fields.Float(required=True, min=0, description='Minimum state of charge (Wh)'),
+    's_max': fields.Float(required=True, min=0, description='Maximum state of charge (Wh)'),
+    's_initial': fields.Float(required=True, min=0, description='Initial state of charge (Wh)'),
     'p_demand': fields.List(fields.Float, required=False, description='Minimum charge demand per time step (Wh)'),
     's_goal': fields.List(fields.Float, required=False, description='Goal state of charge at each time step (Wh)'),
     'c_min': fields.Float(required=True, min=0, description='Minimum charge power (W)'),
@@ -305,12 +305,15 @@ class OptimizeCharging(Resource):
             if lengths['dt'] == 0:
                 api.abort(400, "Time series must not be empty")
 
-            # c_min above c_max can never charge; with a demand or goal the model came back
-            # Infeasible with nothing naming the battery
+            # contradictory limits came back as a bare Infeasible with nothing naming the battery:
+            # c_min above c_max can never charge, s_initial above s_capacity has no state to start from
             for i, bat in enumerate(batteries):
                 if bat.c_min > bat.c_max:
                     api.abort(400, "Minimum charge power must not exceed maximum charge power",
                               details={f'batteries.{i}.c_min': f'{bat.c_min} exceeds c_max {bat.c_max}'})
+                if bat.s_initial > bat.s_capacity:
+                    api.abort(400, "Initial state of charge must not exceed capacity",
+                              details={f'batteries.{i}.s_initial': f'{bat.s_initial} exceeds s_capacity {bat.s_capacity}'})
 
         except BadRequest:
             raise
