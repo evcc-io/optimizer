@@ -118,6 +118,31 @@ def test_client_version_is_logged(payload, capsys):
     assert json.loads(capsys.readouterr().out)['bad_request']['client'] == 'evcc/0.308.1'
 
 
+@pytest.mark.parametrize('field', ['c_min', 'c_max', 'd_max'])
+def test_negative_power_limit_names_the_field(payload, field, capsys):
+    # a negative d_max gave the discharge variable an empty domain and the request came back
+    # as a bare Infeasible, see evcc-io/optimizer#209
+    payload['batteries'][0][field] = -1700
+
+    response = app.test_client().post('/optimize/charge-schedule', json=payload)
+
+    assert response.status_code == 400
+    assert list(response.json['details']) == [f'batteries.0.{field}']
+    assert json.loads(capsys.readouterr().out)['bad_request']['validator'] == 'minimum'
+
+
+def test_c_min_above_c_max_is_rejected(payload):
+    payload['batteries'][0]['c_min'] = 6000
+
+    response = app.test_client().post('/optimize/charge-schedule', json=payload)
+
+    assert response.status_code == 400
+    assert response.json == {
+        'message': 'Minimum charge power must not exceed maximum charge power',
+        'details': {'batteries.0.c_min': '6000 exceeds c_max 5000'},
+    }
+
+
 def test_conversion_error_logs_omit_exception_values(payload, monkeypatch, capsys):
     def invalid_battery(**kwargs):
         raise ValueError('private-exception-value')

@@ -179,10 +179,10 @@ battery_config_model = api.model('BatteryConfig', {
     's_initial': fields.Float(required=True, description='Initial state of charge (Wh)'),
     'p_demand': fields.List(fields.Float, required=False, description='Minimum charge demand per time step (Wh)'),
     's_goal': fields.List(fields.Float, required=False, description='Goal state of charge at each time step (Wh)'),
-    'c_min': fields.Float(required=True, description='Minimum charge power (W)'),
-    'c_max': fields.Float(required=True, description='Maximum charge power (W)'),
+    'c_min': fields.Float(required=True, min=0, description='Minimum charge power (W)'),
+    'c_max': fields.Float(required=True, min=0, description='Maximum charge power (W)'),
     'c_active': fields.Boolean(required=False, description='Whether the device is charging at the start of the time horizon.'),
-    'd_max': fields.Float(required=True, description='Maximum discharge power (W)'),
+    'd_max': fields.Float(required=True, min=0, description='Maximum discharge power (W)'),
     'p_a': fields.Float(required=True, description='Monetary value per Wh at end of the optimization horizon'),
     'c_priority': fields.Integer(required=False, description='Charging and discharging priority compared to other batteries. 2 = highest priority.')
 })
@@ -304,6 +304,13 @@ class OptimizeCharging(Resource):
 
             if lengths['dt'] == 0:
                 api.abort(400, "Time series must not be empty")
+
+            # c_min above c_max can never charge; with a demand or goal the model came back
+            # Infeasible with nothing naming the battery
+            for i, bat in enumerate(batteries):
+                if bat.c_min > bat.c_max:
+                    api.abort(400, "Minimum charge power must not exceed maximum charge power",
+                              details={f'batteries.{i}.c_min': f'{bat.c_min} exceeds c_max {bat.c_max}'})
 
         except BadRequest:
             raise
