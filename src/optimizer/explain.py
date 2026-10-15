@@ -12,7 +12,12 @@ SYSTEM_PROMPTS = {
 The optimizer solves a mixed integer linear program over the horizon. It minimises grid import cost minus
 feed-in revenue minus the value of the energy left in each battery at the end of the horizon (p_a per kWh),
 subject to the power balance, the battery bounds and efficiencies, grid limits, charge demands and soc goals.
-A charging strategy only chooses between schedules of equal cost. Status Optimal is the proven cost optimum,
+A charging strategy only chooses between schedules of equal cost: charge_before_export charges batteries before
+exporting to the grid, attenuate_demand_peaks levels the grid import profile by charging at partial power over
+several steps instead of one peak, attenuate_feedin_peaks levels the grid export profile by charging to shave solar
+feed-in peaks, attenuate_grid_peaks levels both. The discharging strategy discharge_before_import discharges
+batteries before importing from the grid. A battery marked "no discharge" only ever charges, a vehicle for instance.
+Status Optimal is the proven cost optimum,
 Feasible is a schedule the solver stopped on at its time limit, Infeasible means the constraints contradict
 each other and no schedule exists.
 Explain why the plan looks the way it does: when and why each battery charges or discharges, how prices, solar
@@ -23,7 +28,12 @@ Der Optimierer löst ein gemischt-ganzzahliges lineares Programm über den Horiz
 Netzbezugs abzüglich der Einspeisevergütung und abzüglich des Werts der Energie, die am Ende des Horizonts in
 jeder Batterie verbleibt (p_a je kWh), unter Einhaltung der Leistungsbilanz, der Batteriegrenzen und
 Wirkungsgrade, der Netzlimits, der Ladebedarfe und der SoC-Ziele.
-Eine Ladestrategie wählt nur zwischen kostengleichen Fahrplänen. Status Optimal ist das bewiesene Kostenoptimum,
+Eine Ladestrategie wählt nur zwischen kostengleichen Fahrplänen: charge_before_export lädt Batterien, bevor ins Netz
+eingespeist wird, attenuate_demand_peaks glättet den Netzbezug durch Laden mit Teilleistung über mehrere Schritte statt
+einer Spitze, attenuate_feedin_peaks glättet die Einspeisung durch Laden in den Solarspitzen, attenuate_grid_peaks
+glättet beides. Die Entladestrategie discharge_before_import entlädt Batterien, bevor aus dem Netz bezogen wird. Eine
+Batterie mit "no discharge" wird nur geladen, zum Beispiel ein Fahrzeug.
+Status Optimal ist das bewiesene Kostenoptimum,
 Feasible ein Fahrplan, bei dem der Solver am Zeitlimit abgebrochen hat, Infeasible bedeutet, dass sich die
 Nebenbedingungen widersprechen und kein Fahrplan existiert.
 Erkläre, warum der Fahrplan so aussieht: wann und warum jede Batterie lädt oder entlädt, wie Preise, Solar und
@@ -87,7 +97,8 @@ def digest(payload):
         batteries.append(
             f"{i}: {titles[i]} ({detail.get('type', 'battery')}, {detail.get('capacity', kwh(bat.get('s_capacity', bat['s_max'])))} kWh): "
             f"soc {kwh(bat['s_initial'])} kWh within {kwh(bat['s_min'])}..{kwh(bat['s_max'])} kWh, "
-            f"charge {kwh(bat['c_min'])}..{kwh(bat['c_max'])} kW, discharge {kwh(bat['d_max'])} kW, "
+            f"charge {kwh(bat['c_min'])}..{kwh(bat['c_max'])} kW, "
+            + (f"discharge {kwh(bat['d_max'])} kW, " if bat['d_max'] > 0 else 'no discharge, ')
             + ', '.join(e for e in extras if e))
 
     ts = req['time_series']

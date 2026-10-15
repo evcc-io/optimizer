@@ -57,7 +57,10 @@ def test_digest_names_batteries_and_lists_every_step(payload):
     text = explain.digest(payload)
 
     assert '0: Home battery (battery, 10 kWh): soc 5.0 kWh within 0.0..10.0 kWh' in text
-    assert 'may charge from grid, no grid discharge, remaining energy valued 0.200 EUR/kWh' in text
+    assert 'charge 0.0..5.0 kW, discharge 5.0 kW, may charge from grid, no grid discharge, remaining energy valued 0.200 EUR/kWh' in text
+
+    payload['req']['batteries'][0]['d_max'] = 0
+    assert 'charge 0.0..5.0 kW, no discharge, may charge from grid' in explain.digest(payload)
     assert '2026-10-15 10:30 | 15 | 0.100 | 0.100 | 0.0 | 0.2 | 1.5/0.0 | 1.2/0.0/5.8' in text
     assert text.endswith('2026-10-15 11:00 | 60 | 0.200 | 0.100 | 2.0 | 1.0 | 0.0/1.0 | 0.0/0.0/7.0')
 
