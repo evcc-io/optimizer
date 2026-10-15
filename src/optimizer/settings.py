@@ -44,5 +44,5 @@ class OptimizerSettings(BaseSettings):
     azure_openai_endpoint: str | None = Field(default=None,
                                               description="Azure OpenAI resource the plan explanations are generated with, such as "
                                                           "https://name.openai.azure.com/. Unset disables /optimize/explain")
-    azure_openai_deployment: str = Field(default="gpt-5.4-mini", description="Deployment name of the chat model behind /optimize/explain")
+    azure_openai_deployment: str = Field(default="gpt-6-luna", description="Deployment name of the chat model behind /optimize/explain")
     azure_openai_key: str | None = Field(default=None, description="API key of the Azure OpenAI resource")
