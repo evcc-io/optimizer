@@ -79,7 +79,7 @@ def per_kwh(per_wh):
 
 
 # evcc battery detail types as the model should call them
-KINDS = {'vehicle': 'vehicle', 'battery': 'home battery', 'loadpoint': 'charging point without a known vehicle'}
+KINDS = {'vehicle': 'vehicle', 'battery': 'home battery', 'loadpoint': 'charging point'}
 
 
 def digest(payload):
