@@ -83,17 +83,13 @@ def test_explain_relays_the_digest_in_the_requested_language(payload, configured
     assert response.status_code == 200, response.json
     assert response.json == {'explanation': 'Because the price drops at 10:30.'}
     system, user = seen['messages']
-    assert system['content'] == explain.SYSTEM_PROMPTS['de']
+    assert system['content'] == explain.SYSTEM_PROMPT + '\nAnswer in the language with IETF tag de.'
     assert '2026-10-15 10:00 | 15 | 0.300' in user['content']
     assert '"tokens": 42' in capsys.readouterr().out
 
 
-@pytest.mark.parametrize('language, expected', [
-    (None, explain.SYSTEM_PROMPTS['en']),
-    ('de-AT', explain.SYSTEM_PROMPTS['de']),
-    ('fr', explain.SYSTEM_PROMPTS['en'] + '\nAnswer in the language with IETF tag fr.'),
-])
-def test_explain_picks_the_prompt_by_language(payload, configured, monkeypatch, language, expected):
+@pytest.mark.parametrize('language, expected', [(None, 'en'), ('de-AT', 'de-AT')])
+def test_explain_asks_for_the_language(payload, configured, monkeypatch, language, expected):
     seen = {}
 
     def fake_chat(_settings, messages):
@@ -107,7 +103,7 @@ def test_explain_picks_the_prompt_by_language(payload, configured, monkeypatch, 
         del payload['language']
 
     assert app.test_client().post('/optimize/explain', json=payload).status_code == 200
-    assert seen['system'] == expected
+    assert seen['system'].endswith(f'\nAnswer in the language with IETF tag {expected}.')
 
 
 def test_explain_reports_model_errors(payload, configured, monkeypatch):

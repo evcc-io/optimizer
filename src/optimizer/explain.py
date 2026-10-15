@@ -5,10 +5,8 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 
-# system prompts by language. The prompt is not a request parameter: the service would be an open
-# relay to the model otherwise.
-SYSTEM_PROMPTS = {
-    'en': """You explain the schedule of the evcc home energy optimizer to the owner of the home.
+# the prompt is not a request parameter: the service would be an open relay to the model otherwise
+SYSTEM_PROMPT = """You explain the schedule of the evcc home energy optimizer to the owner of the home.
 The optimizer solves a mixed integer linear program over the horizon. It minimises grid import cost minus
 feed-in revenue minus the value of the energy left in each battery at the end of the horizon (p_a per kWh),
 subject to the power balance, the battery bounds and efficiencies, grid limits, charge demands and soc goals.
@@ -24,26 +22,7 @@ Explain why the plan looks the way it does: when and why each vehicle and home b
 how prices, solar and load drive that, and what state it ends in. Call every vehicle and home battery by the name
 given in the plan, say vehicle for a vehicle and battery for a home battery. Point out anything surprising. Be
 concrete, cite times and numbers from the plan. Use markdown with short paragraphs, no tables. Stay under 250
-words. Answer in English.""",
-    'de': """Du erklärst dem Besitzer eines Hauses den Fahrplan des evcc-Optimierers für sein Energiesystem.
-Der Optimierer löst ein gemischt-ganzzahliges lineares Programm über den Horizont. Er minimiert die Kosten des
-Netzbezugs abzüglich der Einspeisevergütung und abzüglich des Werts der Energie, die am Ende des Horizonts in
-jeder Batterie verbleibt (p_a je kWh), unter Einhaltung der Leistungsbilanz, der Batteriegrenzen und
-Wirkungsgrade, der Netzlimits, der Ladebedarfe und der SoC-Ziele.
-Eine Ladestrategie wählt nur zwischen kostengleichen Fahrplänen: charge_before_export lädt Batterien, bevor ins Netz
-eingespeist wird, attenuate_demand_peaks glättet den Netzbezug durch Laden mit Teilleistung über mehrere Schritte statt
-einer Spitze, attenuate_feedin_peaks glättet die Einspeisung durch Laden in den Solarspitzen, attenuate_grid_peaks
-glättet beides. Die Entladestrategie discharge_before_import entlädt Batterien, bevor aus dem Netz bezogen wird. Eine
-Batterie mit "no discharge" wird nur geladen, zum Beispiel ein Fahrzeug.
-Status Optimal ist das bewiesene Kostenoptimum,
-Feasible ein Fahrplan, bei dem der Solver am Zeitlimit abgebrochen hat, Infeasible bedeutet, dass sich die
-Nebenbedingungen widersprechen und kein Fahrplan existiert.
-Erkläre, warum der Fahrplan so aussieht: wann und warum jedes Fahrzeug und jede Hausbatterie lädt oder entlädt,
-wie Preise, Solar und Last das bestimmen, und in welchem Zustand sie endet. Nenne jedes Fahrzeug und jede
-Hausbatterie bei dem Namen aus dem Fahrplan, sprich bei einem Fahrzeug vom Fahrzeug und bei einer Hausbatterie von
-der Batterie. Weise auf Überraschendes hin. Sei konkret, nenne Zeiten und Zahlen aus dem Fahrplan. Verwende
-Markdown mit kurzen Absätzen, keine Tabellen. Bleib unter 250 Wörtern. Antworte auf Deutsch.""",
-}
+words."""
 
 CHAT_TIMEOUT = 45  # seconds, below the gunicorn request timeout
 
@@ -169,11 +148,8 @@ def chat(settings, messages):
 def explain(payload, settings):
     """Explain a plan in the payload's language. Returns the markdown text and the token usage."""
     language = payload.get('language') or 'en'
-    prompt = SYSTEM_PROMPTS.get(language.split('-')[0].lower())
-    if prompt is None:
-        prompt = f"{SYSTEM_PROMPTS['en']}\nAnswer in the language with IETF tag {language}."
     messages = [
-        {'role': 'system', 'content': prompt},
+        {'role': 'system', 'content': f'{SYSTEM_PROMPT}\nAnswer in the language with IETF tag {language}.'},
         {'role': 'user', 'content': f'Explain this plan.\n\n{digest(payload)}'},
     ]
     return chat(settings, messages)
