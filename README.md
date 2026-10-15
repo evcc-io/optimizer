@@ -86,7 +86,7 @@ Measured over 170 captured requests, 150 of them slow ones: HiGHS alone is the f
 
 ## API
 
-`POST /optimize/charge-schedule` takes the whole problem as one JSON document and returns the schedule. `GET /optimize/health` is the liveness probe. Every field is documented in [`openapi.yaml`](openapi.yaml).
+`POST /optimize/charge-schedule` takes the whole problem as one JSON document and returns the schedule. `POST /optimize/explain` takes a request and its schedule back and explains the schedule in plain language, through a chat model the service is configured with (`OPTIMIZER_AZURE_OPENAI_ENDPOINT`, `OPTIMIZER_AZURE_OPENAI_KEY`, `OPTIMIZER_AZURE_OPENAI_DEPLOYMENT`). `GET /optimize/health` is the liveness probe. Every field is documented in [`openapi.yaml`](openapi.yaml).
 
 ```jsonc
 {

@@ -74,6 +74,11 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
           keyVaultUrl: '${keyVault.properties.vaultUri}secrets/jwt-token-secret'
           identity: 'system'
         }
+        {
+          name: 'azure-openai-key'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/azure-openai-key'
+          identity: 'system'
+        }
       ]
     }
     template: {
@@ -119,6 +124,11 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
               value: '--workers 1 --timeout 60 --max-requests 100 --max-requests-jitter 50 --config python:optimizer.gunicorn_conf --access-logfile - --access-logformat \'%(m)s %(U)s %(s)s %(D)s\''
             }
             { name: 'JWT_TOKEN_SECRET', secretRef: 'jwt-token-secret' }
+            // plan explanations, /optimize/explain. The deployment behind it is gpt-5.4-mini on the
+            // evcc-ai-resource in rg-ai-models: a two day plan is some 3k input tokens and the answer
+            // 500, so an explanation costs well under a cent.
+            { name: 'OPTIMIZER_AZURE_OPENAI_ENDPOINT', value: 'https://evcc-ai-resource.cognitiveservices.azure.com/' }
+            { name: 'OPTIMIZER_AZURE_OPENAI_KEY', secretRef: 'azure-openai-key' }
           ]
           probes: [
             {

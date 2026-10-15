@@ -10,6 +10,7 @@ from flask import Flask, after_this_request, g, jsonify, request
 from flask_restx import Api, Resource, fields
 from werkzeug.exceptions import BadRequest
 
+from . import explain
 from .optimizer import CHARGING_STRATEGIES, DISCHARGING_STRATEGIES, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
 from .settings import OptimizerSettings
 
@@ -374,6 +375,56 @@ class OptimizeCharging(Resource):
 
         except Exception as e:
             api.abort(500, f"Optimization failed: {str(e)}")
+
+
+explain_input_model = api.model('ExplainInput', {
+    'req': fields.Nested(optimization_input_model, required=True, description='The request the plan was computed from'),
+    'res': fields.Nested(optimization_result_model, required=True, description='The plan returned for it'),
+    'details': fields.Raw(required=False, description='Request details as evcc publishes them: timestamp per step, '
+                                                      'batteryDetails with title, type and capacity per battery'),
+    'currency': fields.String(required=False, description='Currency of the prices, EUR by default'),
+    'language': fields.String(required=False, description='Language of the explanation as an IETF tag such as de, en by default'),
+})
+
+explain_result_model = api.model('ExplainResult', {
+    'explanation': fields.String(description='Explanation of the plan, markdown'),
+})
+
+
+@ns.route('/explain')
+class ExplainPlan(Resource):
+    @api.expect(explain_input_model, validate=True)
+    @api.marshal_with(explain_result_model)
+    def post(self):
+        """
+        Explain an optimizer plan in plain language
+
+        Folds the plan into clock hours and asks a chat model why it looks the way it does.
+        """
+        if not settings.azure_openai_endpoint or not settings.azure_openai_key:
+            api.abort(503, "Plan explanations are not configured")
+
+        data = api.payload
+        # the result model documents its fields but requires none of them
+        for key in ('status', 'batteries'):
+            if key not in data['res']:
+                api.abort(400, f"res.{key} is a required property")
+
+        started = time.perf_counter()
+        try:
+            text, usage = explain.explain(data, settings)
+        except explain.ExplainError as e:
+            api.abort(502, str(e))
+
+        # one JSON line per request, so the model cost can be read against the client that caused it
+        print(json.dumps({"explain": {
+            "client": request.headers.get('User-Agent'),
+            "elapsed": round(time.perf_counter() - started, 3),
+            "steps": len(data['req']['time_series']['dt']),
+            "tokens": usage.get('total_tokens'),
+        }}), flush=True)
+
+        return {'explanation': text}
 
 
 @ns.route('/health')

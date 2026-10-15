@@ -125,6 +125,48 @@ paths:
               example:
                 message: "Optimization failed: Infeasible problem"
 
+  /optimize/explain:
+    post:
+      tags:
+        - optimization
+      summary: Explain an optimizer plan
+      description: |
+        Explains in plain language why a plan looks the way it does. The request and the plan are folded
+        into clock hours and handed to a chat model together with a description of the optimization model.
+
+        The endpoint is only available where the service is configured with a chat model.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExplainInput"
+      responses:
+        "200":
+          description: The explanation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExplainResult"
+        "400":
+          description: Bad request - request or plan missing or malformed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: The chat model could not be asked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Explanations are not configured on this service
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /optimize/health:
     get:
       tags:
@@ -470,6 +512,58 @@ components:
             minimum: 0
           description: Energy not exported due to hitting the grid export power limit at each time step (Wh)
           example: [0, 0, 1000, 10, 0, 0]
+
+    ExplainInput:
+      type: object
+      required:
+        - req
+        - res
+      properties:
+        req:
+          $ref: "#/components/schemas/OptimizationInput"
+          description: The request the plan was computed from
+        res:
+          $ref: "#/components/schemas/OptimizationResult"
+          description: The plan returned for it
+        details:
+          type: object
+          description: Request details as evcc publishes them in its state, a timestamp per step and batteryDetails with title, type and capacity per battery
+          properties:
+            timestamp:
+              type: array
+              items:
+                type: string
+                format: date-time
+            batteryDetails:
+              type: array
+              items:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  title:
+                    type: string
+                  type:
+                    type: string
+                  capacity:
+                    type: number
+                    description: kWh
+        currency:
+          type: string
+          description: Currency of the prices
+          default: EUR
+        language:
+          type: string
+          description: Language of the explanation as an IETF tag
+          default: en
+          example: de
+
+    ExplainResult:
+      type: object
+      properties:
+        explanation:
+          type: string
+          description: Explanation of the plan, markdown
 
     Error:
       type: object
