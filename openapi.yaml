@@ -131,8 +131,9 @@ paths:
         - optimization
       summary: Explain an optimizer plan
       description: |
-        Explains in plain language why a plan looks the way it does. The request and the plan are folded
-        into clock hours and handed to a chat model together with a description of the optimization model.
+        Explains in plain language why a plan looks the way it does. The request and the plan are rendered
+        as a text table, one row per step, and handed to a chat model together with a description of the
+        optimization model.
 
         The endpoint is only available where the service is configured with a chat model.
       requestBody:
@@ -557,10 +558,6 @@ components:
           description: Language of the explanation as an IETF tag
           default: en
           example: de
-        prompt:
-          type: string
-          maxLength: 4000
-          description: System prompt the plan is explained with. The default describes the optimization model and asks for a short markdown explanation
 
     ExplainResult:
       type: object

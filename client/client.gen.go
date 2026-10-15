@@ -140,12 +140,9 @@ type ExplainInput struct {
 	} `json:"details,omitempty"`
 
 	// Language Language of the explanation as an IETF tag
-	Language string `json:"language,omitempty"`
-
-	// Prompt System prompt the plan is explained with. The default describes the optimization model and asks for a short markdown explanation
-	Prompt string             `json:"prompt,omitempty"`
-	Req    OptimizationInput  `json:"req"`
-	Res    OptimizationResult `json:"res"`
+	Language string             `json:"language,omitempty"`
+	Req      OptimizationInput  `json:"req"`
+	Res      OptimizationResult `json:"res"`
 }
 
 // ExplainResult defines model for ExplainResult.

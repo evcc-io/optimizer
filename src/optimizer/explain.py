@@ -1,11 +1,14 @@
-"""Plan explanations: the plan folded into clock hours and handed to a chat model."""
+"""Plan explanations: the plan rendered as text and handed to a chat model."""
 import json
 import re
 import urllib.error
 import urllib.request
 from datetime import datetime
 
-SYSTEM_PROMPT = """You explain the schedule of the evcc home energy optimizer to the owner of the home.
+# system prompts by language. The prompt is not a request parameter: the service would be an open
+# relay to the model otherwise.
+SYSTEM_PROMPTS = {
+    'en': """You explain the schedule of the evcc home energy optimizer to the owner of the home.
 The optimizer solves a mixed integer linear program over the horizon. It minimises grid import cost minus
 feed-in revenue minus the value of the energy left in each battery at the end of the horizon (p_a per kWh),
 subject to the power balance, the battery bounds and efficiencies, grid limits, charge demands and soc goals.
@@ -13,8 +16,21 @@ A charging strategy only chooses between schedules of equal cost. Status Optimal
 Feasible is a schedule the solver stopped on at its time limit, Infeasible means the constraints contradict
 each other and no schedule exists.
 Explain why the plan looks the way it does: when and why each battery charges or discharges, how prices, solar
-and load drive that, and what state it ends in. Point out anything surprising. Be concrete, cite hours and
-numbers from the plan. Use markdown with short paragraphs, no tables. Stay under 250 words."""
+and load drive that, and what state it ends in. Point out anything surprising. Be concrete, cite times and
+numbers from the plan. Use markdown with short paragraphs, no tables. Stay under 250 words. Answer in English.""",
+    'de': """Du erklärst dem Besitzer eines Hauses den Fahrplan des evcc-Optimierers für sein Energiesystem.
+Der Optimierer löst ein gemischt-ganzzahliges lineares Programm über den Horizont. Er minimiert die Kosten des
+Netzbezugs abzüglich der Einspeisevergütung und abzüglich des Werts der Energie, die am Ende des Horizonts in
+jeder Batterie verbleibt (p_a je kWh), unter Einhaltung der Leistungsbilanz, der Batteriegrenzen und
+Wirkungsgrade, der Netzlimits, der Ladebedarfe und der SoC-Ziele.
+Eine Ladestrategie wählt nur zwischen kostengleichen Fahrplänen. Status Optimal ist das bewiesene Kostenoptimum,
+Feasible ein Fahrplan, bei dem der Solver am Zeitlimit abgebrochen hat, Infeasible bedeutet, dass sich die
+Nebenbedingungen widersprechen und kein Fahrplan existiert.
+Erkläre, warum der Fahrplan so aussieht: wann und warum jede Batterie lädt oder entlädt, wie Preise, Solar und
+Last das bestimmen, und in welchem Zustand sie endet. Weise auf Überraschendes hin. Sei konkret, nenne Zeiten
+und Zahlen aus dem Fahrplan. Verwende Markdown mit kurzen Absätzen, keine Tabellen. Bleib unter 250 Wörtern.
+Antworte auf Deutsch.""",
+}
 
 CHAT_TIMEOUT = 45  # seconds, below the gunicorn request timeout
 
@@ -27,53 +43,18 @@ def at(series, i, default=0):
     return series[i] if series and i < len(series) else default
 
 
-def hour_label(timestamp):
-    # Go stamps RFC3339Nano, fromisoformat takes at most six fractional digits
-    start = datetime.fromisoformat(re.sub(r'\.\d+', '', timestamp))
-    return start.strftime('%Y-%m-%d %H:00')
+def step_labels(dt, timestamps=None):
+    """One label per step: the step's local time, or its offset from the start of the horizon
+    without usable timestamps."""
+    if timestamps and len(timestamps) == len(dt):
+        # Go stamps RFC3339Nano, fromisoformat takes at most six fractional digits
+        return [datetime.fromisoformat(re.sub(r'\.\d+', '', ts)).strftime('%Y-%m-%d %H:%M') for ts in timestamps]
 
-
-def hours(req, res, timestamps=None):
-    """Fold the steps of a plan into clock hours: energies summed, prices averaged by duration, soc
-    taken at the end of the hour. Hourly steps map one to one. Without usable timestamps the hours
-    count from the start of the horizon."""
-    ts = req['time_series']
-    dt = ts['dt']
-    batteries = res.get('batteries') or []
-    if not timestamps or len(timestamps) != len(dt):
-        timestamps = None
-
-    rows = []
-    elapsed = 0
-    for i, step in enumerate(dt):
-        label = hour_label(timestamps[i]) if timestamps else f'+{int(elapsed // 3600)}h'
+    labels, elapsed = [], 0
+    for step in dt:
+        labels.append(f'+{int(elapsed // 3600)}:{int(elapsed % 3600 // 60):02d}')
         elapsed += step
-
-        if not rows or rows[-1]['hour'] != label:
-            rows.append({'hour': label, 'seconds': 0, 'price': 0, 'feed_in': 0, 'pv': 0, 'load': 0,
-                         'grid_import': 0, 'grid_export': 0,
-                         'batteries': [{'charge': 0, 'discharge': 0, 'soc': 0} for _ in batteries]})
-        row = rows[-1]
-
-        row['seconds'] += step
-        row['price'] += at(ts['p_N'], i) * step
-        row['feed_in'] += at(ts['p_E'], i) * step
-        row['pv'] += at(ts['ft'], i)
-        row['load'] += at(ts['gt'], i)
-        row['grid_import'] += at(res.get('grid_import'), i)
-        row['grid_export'] += at(res.get('grid_export'), i)
-        for b, bat in enumerate(batteries):
-            entry = row['batteries'][b]
-            entry['charge'] += at(bat.get('charging_power'), i)
-            entry['discharge'] += at(bat.get('discharging_power'), i)
-            entry['soc'] = at(bat.get('state_of_charge'), i, entry['soc'])
-
-    for row in rows:
-        if row['seconds']:
-            row['price'] /= row['seconds']
-            row['feed_in'] /= row['seconds']
-
-    return rows
+    return labels
 
 
 def kwh(wh):
@@ -86,7 +67,7 @@ def per_kwh(per_wh):
 
 def digest(payload):
     """Render the plan as text the model can reason over: one line per battery with its bounds and one
-    row per hour. A few KB for a two day horizon, where the raw arrays run to hundreds."""
+    row per step, the same timeline the optimizer page shows."""
     req, res = payload['req'], payload['res']
     details = payload.get('details') or {}
     currency = payload.get('currency') or 'EUR'
@@ -109,24 +90,28 @@ def digest(payload):
             f"charge {kwh(bat['c_min'])}..{kwh(bat['c_max'])} kW, discharge {kwh(bat['d_max'])} kW, "
             + ', '.join(e for e in extras if e))
 
-    rows = hours(req, res, details.get('timestamp'))
-    horizon = round(sum(r['seconds'] for r in rows) / 3600)
+    ts = req['time_series']
+    labels = step_labels(ts['dt'], details.get('timestamp'))
+    horizon = round(sum(ts['dt']) / 3600)
     strategy = (req.get('strategy') or {}).get('charging_strategy') or 'none'
     objective = res.get('objective_value')
 
     lines = [
         f"Plan status {res['status']}, objective {objective if objective is not None else 'none'} {currency}, "
-        f"{len(req['time_series']['dt'])} steps over {horizon} h, charging strategy {strategy}.",
+        f"{len(ts['dt'])} steps over {horizon} h, charging strategy {strategy}.",
         'Batteries:',
         *batteries,
-        f'Plan per hour, energies in kWh, prices in {currency}/kWh, battery columns are charge/discharge/soc at the end of the hour:',
-        ' | '.join(['hour', 'import price', 'feed-in price', 'pv', 'load', 'grid import/export', *titles]),
+        f'Plan per step, step start time and length in minutes, energies in kWh per step, prices in {currency}/kWh, '
+        'battery columns are charge/discharge/soc at the end of the step:',
+        ' | '.join(['step', 'minutes', 'import price', 'feed-in price', 'pv', 'load', 'grid import/export', *titles]),
     ]
-    for r in rows:
+    for i, label in enumerate(labels):
         lines.append(' | '.join([
-            r['hour'], per_kwh(r['price']), per_kwh(r['feed_in']), kwh(r['pv']), kwh(r['load']),
-            f"{kwh(r['grid_import'])}/{kwh(r['grid_export'])}",
-            *(f"{kwh(b['charge'])}/{kwh(b['discharge'])}/{kwh(b['soc'])}" for b in r['batteries']),
+            label, str(round(ts['dt'][i] / 60)), per_kwh(at(ts['p_N'], i)), per_kwh(at(ts['p_E'], i)),
+            kwh(at(ts['ft'], i)), kwh(at(ts['gt'], i)),
+            f"{kwh(at(res.get('grid_import'), i))}/{kwh(at(res.get('grid_export'), i))}",
+            *(f"{kwh(at(b.get('charging_power'), i))}/{kwh(at(b.get('discharging_power'), i))}/{kwh(at(b.get('state_of_charge'), i))}"
+              for b in res.get('batteries') or []),
         ]))
 
     return '\n'.join(lines)
@@ -165,9 +150,11 @@ def chat(settings, messages):
 def explain(payload, settings):
     """Explain a plan in the payload's language. Returns the markdown text and the token usage."""
     language = payload.get('language') or 'en'
-    prompt = payload.get('prompt') or SYSTEM_PROMPT
+    prompt = SYSTEM_PROMPTS.get(language.split('-')[0].lower())
+    if prompt is None:
+        prompt = f"{SYSTEM_PROMPTS['en']}\nAnswer in the language with IETF tag {language}."
     messages = [
-        {'role': 'system', 'content': f'{prompt}\nAnswer in the language with IETF tag {language}.'},
+        {'role': 'system', 'content': prompt},
         {'role': 'user', 'content': f'Explain this plan.\n\n{digest(payload)}'},
     ]
     return chat(settings, messages)

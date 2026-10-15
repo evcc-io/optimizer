@@ -384,8 +384,6 @@ explain_input_model = api.model('ExplainInput', {
                                                       'batteryDetails with title, type and capacity per battery'),
     'currency': fields.String(required=False, description='Currency of the prices, EUR by default'),
     'language': fields.String(required=False, description='Language of the explanation as an IETF tag such as de, en by default'),
-    'prompt': fields.String(required=False, max_length=4000, description='System prompt the plan is explained with, replaces the default',
-                            example=explain.SYSTEM_PROMPT),
 })
 
 explain_result_model = api.model('ExplainResult', {
@@ -401,7 +399,7 @@ class ExplainPlan(Resource):
         """
         Explain an optimizer plan in plain language
 
-        Folds the plan into clock hours and asks a chat model why it looks the way it does.
+        Renders the plan as text and asks a chat model why it looks the way it does.
         """
         if not settings.azure_openai_endpoint or not settings.azure_openai_key:
             api.abort(503, "Plan explanations are not configured")

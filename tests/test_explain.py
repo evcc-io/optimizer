@@ -49,28 +49,17 @@ def configured(monkeypatch):
     monkeypatch.setattr(settings, 'azure_openai_key', 'test-key')
 
 
-def test_hours_fold_quarter_hours_into_their_hour(payload):
-    rows = explain.hours(payload['req'], payload['res'], payload['details']['timestamp'])
-
-    assert [r['hour'] for r in rows] == ['2026-10-15 10:00', '2026-10-15 11:00']
-    first, second = rows
-    assert first['price'] == pytest.approx(0.0002)  # duration weighted mean of the quarter hours
-    assert first['batteries'][0] == {'charge': 2500, 'discharge': 500, 'soc': 7000}
-    assert first['grid_import'] == 3000
-    assert second['pv'] == 2000 and second['grid_export'] == 1000
+def test_step_labels_without_timestamps_count_from_the_start(payload):
+    assert explain.step_labels(payload['req']['time_series']['dt']) == ['+0:00', '+0:15', '+0:30', '+0:45', '+1:00']
 
 
-def test_hours_without_timestamps_count_from_the_start(payload):
-    rows = explain.hours(payload['req'], payload['res'])
-    assert [r['hour'] for r in rows] == ['+0h', '+1h']
-
-
-def test_digest_names_batteries_and_hours(payload):
+def test_digest_names_batteries_and_lists_every_step(payload):
     text = explain.digest(payload)
 
     assert '0: Home battery (battery, 10 kWh): soc 5.0 kWh within 0.0..10.0 kWh' in text
     assert 'may charge from grid, no grid discharge, remaining energy valued 0.200 EUR/kWh' in text
-    assert text.endswith('2026-10-15 11:00 | 0.200 | 0.100 | 2.0 | 1.0 | 0.0/1.0 | 0.0/0.0/7.0')
+    assert '2026-10-15 10:30 | 15 | 0.100 | 0.100 | 0.0 | 0.2 | 1.5/0.0 | 1.2/0.0/5.8' in text
+    assert text.endswith('2026-10-15 11:00 | 60 | 0.200 | 0.100 | 2.0 | 1.0 | 0.0/1.0 | 0.0/0.0/7.0')
 
 
 def test_explain_relays_the_digest_in_the_requested_language(payload, configured, monkeypatch, capsys):
@@ -86,12 +75,17 @@ def test_explain_relays_the_digest_in_the_requested_language(payload, configured
     assert response.status_code == 200, response.json
     assert response.json == {'explanation': 'Because the price drops at 10:30.'}
     system, user = seen['messages']
-    assert 'IETF tag de' in system['content']
-    assert '2026-10-15 10:00 | 0.200' in user['content']
+    assert system['content'] == explain.SYSTEM_PROMPTS['de']
+    assert '2026-10-15 10:00 | 15 | 0.300' in user['content']
     assert '"tokens": 42' in capsys.readouterr().out
 
 
-def test_explain_takes_a_custom_prompt(payload, configured, monkeypatch):
+@pytest.mark.parametrize('language, expected', [
+    (None, explain.SYSTEM_PROMPTS['en']),
+    ('de-AT', explain.SYSTEM_PROMPTS['de']),
+    ('fr', explain.SYSTEM_PROMPTS['en'] + '\nAnswer in the language with IETF tag fr.'),
+])
+def test_explain_picks_the_prompt_by_language(payload, configured, monkeypatch, language, expected):
     seen = {}
 
     def fake_chat(_settings, messages):
@@ -99,15 +93,13 @@ def test_explain_takes_a_custom_prompt(payload, configured, monkeypatch):
         return 'ok', {}
 
     monkeypatch.setattr(explain, 'chat', fake_chat)
-    client = app.test_client()
+    if language:
+        payload['language'] = language
+    else:
+        del payload['language']
 
-    assert client.post('/optimize/explain', json=payload).status_code == 200
-    assert seen['system'].startswith(explain.SYSTEM_PROMPT)
-
-    assert client.post('/optimize/explain', json={**payload, 'prompt': 'Answer with one word.'}).status_code == 200
-    assert seen['system'].startswith('Answer with one word.\n')
-
-    assert client.post('/optimize/explain', json={**payload, 'prompt': 'x' * 4001}).status_code == 400
+    assert app.test_client().post('/optimize/explain', json=payload).status_code == 200
+    assert seen['system'] == expected
 
 
 def test_explain_reports_model_errors(payload, configured, monkeypatch):
