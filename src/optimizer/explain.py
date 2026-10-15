@@ -20,9 +20,11 @@ batteries before importing from the grid. A battery marked "no discharge" only e
 Status Optimal is the proven cost optimum,
 Feasible is a schedule the solver stopped on at its time limit, Infeasible means the constraints contradict
 each other and no schedule exists.
-Explain why the plan looks the way it does: when and why each battery charges or discharges, how prices, solar
-and load drive that, and what state it ends in. Point out anything surprising. Be concrete, cite times and
-numbers from the plan. Use markdown with short paragraphs, no tables. Stay under 250 words. Answer in English.""",
+Explain why the plan looks the way it does: when and why each vehicle and home battery charges or discharges,
+how prices, solar and load drive that, and what state it ends in. Call every vehicle and home battery by the name
+given in the plan, say vehicle for a vehicle and battery for a home battery. Point out anything surprising. Be
+concrete, cite times and numbers from the plan. Use markdown with short paragraphs, no tables. Stay under 250
+words. Answer in English.""",
     'de': """Du erklärst dem Besitzer eines Hauses den Fahrplan des evcc-Optimierers für sein Energiesystem.
 Der Optimierer löst ein gemischt-ganzzahliges lineares Programm über den Horizont. Er minimiert die Kosten des
 Netzbezugs abzüglich der Einspeisevergütung und abzüglich des Werts der Energie, die am Ende des Horizonts in
@@ -36,10 +38,11 @@ Batterie mit "no discharge" wird nur geladen, zum Beispiel ein Fahrzeug.
 Status Optimal ist das bewiesene Kostenoptimum,
 Feasible ein Fahrplan, bei dem der Solver am Zeitlimit abgebrochen hat, Infeasible bedeutet, dass sich die
 Nebenbedingungen widersprechen und kein Fahrplan existiert.
-Erkläre, warum der Fahrplan so aussieht: wann und warum jede Batterie lädt oder entlädt, wie Preise, Solar und
-Last das bestimmen, und in welchem Zustand sie endet. Weise auf Überraschendes hin. Sei konkret, nenne Zeiten
-und Zahlen aus dem Fahrplan. Verwende Markdown mit kurzen Absätzen, keine Tabellen. Bleib unter 250 Wörtern.
-Antworte auf Deutsch.""",
+Erkläre, warum der Fahrplan so aussieht: wann und warum jedes Fahrzeug und jede Hausbatterie lädt oder entlädt,
+wie Preise, Solar und Last das bestimmen, und in welchem Zustand sie endet. Nenne jedes Fahrzeug und jede
+Hausbatterie bei dem Namen aus dem Fahrplan, sprich bei einem Fahrzeug vom Fahrzeug und bei einer Hausbatterie von
+der Batterie. Weise auf Überraschendes hin. Sei konkret, nenne Zeiten und Zahlen aus dem Fahrplan. Verwende
+Markdown mit kurzen Absätzen, keine Tabellen. Bleib unter 250 Wörtern. Antworte auf Deutsch.""",
 }
 
 CHAT_TIMEOUT = 45  # seconds, below the gunicorn request timeout
@@ -75,9 +78,13 @@ def per_kwh(per_wh):
     return f'{per_wh * 1000:.3f}'
 
 
+# evcc battery detail types as the model should call them
+KINDS = {'vehicle': 'vehicle', 'battery': 'home battery', 'loadpoint': 'charging point without a known vehicle'}
+
+
 def digest(payload):
-    """Render the plan as text the model can reason over: one line per battery with its bounds and one
-    row per step, the same timeline the optimizer page shows."""
+    """Render the plan as text the model can reason over: one line per vehicle or battery with its bounds
+    and one row per step, the same timeline the optimizer page shows."""
     req, res = payload['req'], payload['res']
     details = payload.get('details') or {}
     currency = payload.get('currency') or 'EUR'
@@ -86,7 +93,8 @@ def digest(payload):
     titles, batteries = [], []
     for i, bat in enumerate(req['batteries']):
         detail = at(bat_details, i, {})
-        titles.append(detail.get('title') or detail.get('name') or f'battery {i}')
+        kind = KINDS.get(detail.get('type'), 'battery')
+        titles.append(detail.get('title') or detail.get('name') or f'{kind} {i}')
         extras = [
             'may charge from grid' if bat.get('charge_from_grid') else 'no grid charging',
             'may discharge to grid' if bat.get('discharge_to_grid') else 'no grid discharge',
@@ -95,7 +103,7 @@ def digest(payload):
             'has soc goals' if any(v > 0 for v in bat.get('s_goal') or []) else '',
         ]
         batteries.append(
-            f"{i}: {titles[i]} ({detail.get('type', 'battery')}, {detail.get('capacity', kwh(bat.get('s_capacity', bat['s_max'])))} kWh): "
+            f"{kind} \"{titles[i]}\" ({detail.get('capacity', kwh(bat.get('s_capacity', bat['s_max'])))} kWh): "
             f"soc {kwh(bat['s_initial'])} kWh within {kwh(bat['s_min'])}..{kwh(bat['s_max'])} kWh, "
             f"charge {kwh(bat['c_min'])}..{kwh(bat['c_max'])} kW, "
             + (f"discharge {kwh(bat['d_max'])} kW, " if bat['d_max'] > 0 else 'no discharge, ')
@@ -110,10 +118,10 @@ def digest(payload):
     lines = [
         f"Plan status {res['status']}, objective {objective if objective is not None else 'none'} {currency}, "
         f"{len(ts['dt'])} steps over {horizon} h, charging strategy {strategy}.",
-        'Batteries:',
+        'Vehicles and batteries:',
         *batteries,
         f'Plan per step, step start time and length in minutes, energies in kWh per step, prices in {currency}/kWh, '
-        'battery columns are charge/discharge/soc at the end of the step:',
+        'vehicle and battery columns are charge/discharge/soc at the end of the step:',
         ' | '.join(['step', 'minutes', 'import price', 'feed-in price', 'pv', 'load', 'grid import/export', *titles]),
     ]
     for i, label in enumerate(labels):
