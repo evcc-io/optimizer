@@ -165,8 +165,9 @@ def chat(settings, messages):
 def explain(payload, settings):
     """Explain a plan in the payload's language. Returns the markdown text and the token usage."""
     language = payload.get('language') or 'en'
+    prompt = payload.get('prompt') or SYSTEM_PROMPT
     messages = [
-        {'role': 'system', 'content': f'{SYSTEM_PROMPT}\nAnswer in the language with IETF tag {language}.'},
+        {'role': 'system', 'content': f'{prompt}\nAnswer in the language with IETF tag {language}.'},
         {'role': 'user', 'content': f'Explain this plan.\n\n{digest(payload)}'},
     ]
     return chat(settings, messages)

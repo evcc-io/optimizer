@@ -557,6 +557,10 @@ components:
           description: Language of the explanation as an IETF tag
           default: en
           example: de
+        prompt:
+          type: string
+          maxLength: 4000
+          description: System prompt the plan is explained with. The default describes the optimization model and asks for a short markdown explanation
 
     ExplainResult:
       type: object

@@ -384,6 +384,8 @@ explain_input_model = api.model('ExplainInput', {
                                                       'batteryDetails with title, type and capacity per battery'),
     'currency': fields.String(required=False, description='Currency of the prices, EUR by default'),
     'language': fields.String(required=False, description='Language of the explanation as an IETF tag such as de, en by default'),
+    'prompt': fields.String(required=False, max_length=4000, description='System prompt the plan is explained with, replaces the default',
+                            example=explain.SYSTEM_PROMPT),
 })
 
 explain_result_model = api.model('ExplainResult', {

@@ -91,6 +91,25 @@ def test_explain_relays_the_digest_in_the_requested_language(payload, configured
     assert '"tokens": 42' in capsys.readouterr().out
 
 
+def test_explain_takes_a_custom_prompt(payload, configured, monkeypatch):
+    seen = {}
+
+    def fake_chat(_settings, messages):
+        seen['system'] = messages[0]['content']
+        return 'ok', {}
+
+    monkeypatch.setattr(explain, 'chat', fake_chat)
+    client = app.test_client()
+
+    assert client.post('/optimize/explain', json=payload).status_code == 200
+    assert seen['system'].startswith(explain.SYSTEM_PROMPT)
+
+    assert client.post('/optimize/explain', json={**payload, 'prompt': 'Answer with one word.'}).status_code == 200
+    assert seen['system'].startswith('Answer with one word.\n')
+
+    assert client.post('/optimize/explain', json={**payload, 'prompt': 'x' * 4001}).status_code == 400
+
+
 def test_explain_reports_model_errors(payload, configured, monkeypatch):
     def failing_chat(_settings, _messages):
         raise explain.ExplainError('model returned 429: slow down')
