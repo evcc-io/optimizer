@@ -92,12 +92,10 @@ def digest(payload):
     currency = payload.get('currency') or 'EUR'
 
     bat_details = details.get('batteryDetails') or []
-    titles = [(at(bat_details, i, {}).get('title') or at(bat_details, i, {}).get('name') or f'battery {i}')
-              for i in range(len(req['batteries']))]
-
-    batteries = []
+    titles, batteries = [], []
     for i, bat in enumerate(req['batteries']):
         detail = at(bat_details, i, {})
+        titles.append(detail.get('title') or detail.get('name') or f'battery {i}')
         extras = [
             'may charge from grid' if bat.get('charge_from_grid') else 'no grid charging',
             'may discharge to grid' if bat.get('discharge_to_grid') else 'no grid discharge',
