@@ -47,4 +47,3 @@ def payload():
 def configured(monkeypatch):
     monkeypatch.setattr(settings, 'azure_openai_endpoint', 'https://example.invalid/')
     monkeypatch.setattr(settings, 'azure_openai_key', 'test-key')
-
