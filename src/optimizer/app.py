@@ -10,7 +10,7 @@ from flask import Flask, after_this_request, g, jsonify, request
 from flask_restx import Api, Resource, fields
 from werkzeug.exceptions import BadRequest
 
-from . import explain
+from . import explain, feedback
 from .optimizer import CHARGING_STRATEGIES, DISCHARGING_STRATEGIES, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
 from .settings import OptimizerSettings
 
@@ -390,6 +390,21 @@ explain_result_model = api.model('ExplainResult', {
     'explanation': fields.String(description='Explanation of the plan, markdown'),
 })
 
+explain_feedback_model = api.inherit('ExplainFeedback', explain_input_model, {
+    'explanation': fields.String(required=True, description='The explanation as returned by /optimize/explain'),
+    'vote': fields.String(required=True, enum=['up', 'down'], description='Whether the explanation helped'),
+    'comment': fields.String(required=False, description='What was wrong or missing, optional'),
+})
+
+
+def plan_payload():
+    """The validated payload; the result model documents its fields but requires none of them."""
+    data = api.payload
+    for key in ('status', 'batteries'):
+        if key not in data['res']:
+            api.abort(400, f"res.{key} is a required property")
+    return data
+
 
 @ns.route('/explain')
 class ExplainPlan(Resource):
@@ -404,11 +419,7 @@ class ExplainPlan(Resource):
         if not settings.azure_openai_endpoint or not settings.azure_openai_key:
             api.abort(503, "Plan explanations are not configured")
 
-        data = api.payload
-        # the result model documents its fields but requires none of them
-        for key in ('status', 'batteries'):
-            if key not in data['res']:
-                api.abort(400, f"res.{key} is a required property")
+        data = plan_payload()
 
         started = time.perf_counter()
         try:
@@ -425,6 +436,28 @@ class ExplainPlan(Resource):
         }}), flush=True)
 
         return {'explanation': text}
+
+
+@ns.route('/explain/feedback')
+class ExplainFeedback(Resource):
+    @api.expect(explain_feedback_model, validate=True)
+    def post(self):
+        """
+        Vote on an explanation
+
+        Stores the plan, the explanation it got and the thumbs up or down with an optional comment.
+        Nothing is stored until a user votes.
+        """
+        if not feedback.configured(settings):
+            api.abort(503, "Explanation feedback is not configured")
+
+        data = plan_payload()
+        try:
+            feedback.store(settings, data, explain.digest(data), explain.SYSTEM_PROMPT, g.get('subject'))
+        except Exception as e:
+            api.abort(502, f"feedback not stored: {str(e)[:200]}")
+
+        return {}
 
 
 @ns.route('/health')
