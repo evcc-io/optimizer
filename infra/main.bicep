@@ -54,16 +54,11 @@ resource feedbackTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2
   name: 'explanations'
 }
 
-// Storage Table Data Contributor for the container app's managed identity
-resource feedbackWriter 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(feedbackStorage.id, containerApp.id, 'table-data-contributor')
-  scope: feedbackStorage
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aebd')
-    principalId: containerApp.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
+// The container app writes with its managed identity. Its Storage Table Data Contributor role on
+// this account is assigned by hand: the deploy principal is Contributor and may not write role
+// assignments. Once, after the first deploy that creates the account:
+//   az role assignment create --role "Storage Table Data Contributor" --scope <feedbackStorage.id> \
+//     --assignee-object-id <containerApp.identity.principalId> --assignee-principal-type ServicePrincipal
 
 @description('Custom hostname served by the container app')
 param customHostname string = 'optimizer.evcc.io'
