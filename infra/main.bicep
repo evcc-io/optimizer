@@ -124,11 +124,7 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
               value: '--workers 1 --timeout 60 --max-requests 100 --max-requests-jitter 50 --config python:optimizer.gunicorn_conf --access-logfile - --access-logformat \'%(m)s %(U)s %(s)s %(D)s\''
             }
             { name: 'JWT_TOKEN_SECRET', secretRef: 'jwt-token-secret' }
-            // plan explanations, /optimize/explain. The deployment behind it is gpt-6-luna on the
-            // evcc-ai-resource in rg-ai-models, 0.10 $ per million input tokens: a four day plan is
-            // some 18k input tokens and the answer 400, so an explanation costs a fifth of a cent.
-            // gpt-5.4-mini answered as well at eight times the price, gpt-5.4-nano and gpt-oss-120b
-            // got facts wrong, DeepSeek-V4.1-Flash spent the whole output budget on reasoning.
+            // plan explanations, /optimize/explain
             { name: 'OPTIMIZER_AZURE_OPENAI_ENDPOINT', value: 'https://evcc-ai-resource.cognitiveservices.azure.com/' }
             { name: 'OPTIMIZER_AZURE_OPENAI_KEY', secretRef: 'azure-openai-key' }
           ]
