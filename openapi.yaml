@@ -168,6 +168,44 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /optimize/explain/feedback:
+    post:
+      tags:
+        - optimization
+      summary: Vote on an explanation
+      description: |
+        Stores a thumbs up or down and an optional comment together with the plan and the explanation
+        /optimize/explain gave for it, to improve the prompt. Nothing is stored until a user votes.
+
+        The endpoint is only available where the service is configured with a feedback store.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExplainFeedback"
+      responses:
+        "200":
+          description: The vote was stored
+        "400":
+          description: Bad request - plan, explanation or vote missing or malformed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: The feedback store could not be reached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Feedback is not configured on this service
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /optimize/health:
     get:
       tags:
@@ -565,6 +603,25 @@ components:
         explanation:
           type: string
           description: Explanation of the plan, markdown
+
+    ExplainFeedback:
+      allOf:
+        - $ref: "#/components/schemas/ExplainInput"
+        - type: object
+          required:
+            - explanation
+            - vote
+          properties:
+            explanation:
+              type: string
+              description: The explanation as returned by /optimize/explain
+            vote:
+              type: string
+              enum: [up, down]
+              description: Whether the explanation helped
+            comment:
+              type: string
+              description: What was wrong or missing, optional
 
     Error:
       type: object

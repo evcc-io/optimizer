@@ -46,3 +46,10 @@ class OptimizerSettings(BaseSettings):
                                                           "https://name.openai.azure.com/. Unset disables /optimize/explain")
     azure_openai_deployment: str = Field(default="gpt-6-luna", description="Deployment name of the chat model behind /optimize/explain")
     azure_openai_key: str | None = Field(default=None, description="API key of the Azure OpenAI resource")
+    feedback_table_endpoint: str | None = Field(default=None,
+                                                description="Azure table service the explanations and the votes on them are stored in, "
+                                                            "such as https://name.table.core.windows.net, accessed with the managed identity. "
+                                                            "Unset without a connection string disables /optimize/explain/feedback")
+    feedback_connection_string: str | None = Field(default=None,
+                                                   description="Storage account connection string for the explanations table, for "
+                                                               "local runs and Azurite. Takes precedence over the endpoint")
