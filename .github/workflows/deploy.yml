@@ -43,7 +43,7 @@ jobs:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Deploy infrastructure
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           inlineScript: |
             az deployment group create \
