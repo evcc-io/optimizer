@@ -7,7 +7,6 @@ import pulp
 import pytest
 from test_objective_split import build
 
-from optimizer.highs import BulkHiGHS
 from optimizer.optimizer import Optimizer
 from optimizer.settings import OptimizerSettings
 
@@ -54,9 +53,9 @@ def test_split_runs_on_highs(solvers):
 
     assert optimizer.solve_path == 'split'
     stages = dict(solvers)
-    assert stages['cost'] is BulkHiGHS
-    assert stages['tie_break'] is BulkHiGHS
-    # the gap of a HiGHS cost stage comes from the solver model, not a CBC log
+    assert stages['cost'] is pulp.HiGHS
+    assert stages['tie_break'] is pulp.HiGHS
+    # the gap of a HiGHS cost stage comes from the stats, not a CBC log
     assert optimizer.cost_stage_gap == 0
 
 

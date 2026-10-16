@@ -1,5 +1,4 @@
 import os
-import re
 import threading
 import time
 from contextlib import contextmanager
@@ -12,7 +11,6 @@ import highspy
 import numpy as np
 import pulp
 
-from .highs import BulkHiGHS
 from .settings import OptimizerSettings
 
 
@@ -838,7 +836,7 @@ class Optimizer:
     def _solver(self, tmpdir, **options):
         """The solver of the current stage with the shared settings. CBC writes its scratch files to tmpdir."""
         if self._stage_solver() == 'highs':
-            # the cost stage reads its gap from the stats, not a CBC log, see _stage_gap
+            # HiGHS reports its bound in the stats, no log to parse, see _stage_gap
             options.pop('logPath', None)
             # HiGHS also stops at a relative gap of 1e-4 by default, CBC only on the absolute one
             options.setdefault('gapRel', 0)
@@ -847,7 +845,7 @@ class Optimizer:
                 options.update(callbackTuple=(self._interrupt, None),
                                callbacksToActivate=[types.kCallbackMipInterrupt, types.kCallbackSimplexInterrupt,
                                                     types.kCallbackIpmInterrupt])
-            return BulkHiGHS(msg=False, threads=self.settings.num_threads, **options)
+            return pulp.HiGHS(msg=False, threads=self.settings.num_threads, **options)
 
         # pulp resolves the binary unless one is configured: a cbc on PATH, the 2.10 release build
         # the image installs. The cbcbox wheel of the pulp cbc extra is deliberately not used, its
@@ -883,20 +881,20 @@ class Optimizer:
         finally:
             self._cutoff = None
 
-    def _stage_gap(self, stats, log_path, scale) -> float | None:
-        """Distance between the cost stage's schedule and the solver's bound, in currency."""
-        if self._stage_solver() != 'highs':
-            return self._cbc_gap(log_path, scale)
-        # pulp 4 leaves best_bound unset for HiGHS, the solver model has it. A proven solve has
-        # nothing left open, the way CBC's log prints no bound for one
+    @staticmethod
+    def _stage_gap(stats, scale) -> float | None:
+        """Distance between the cost stage's schedule and the solver's bound, in currency.
+
+        HiGHS reports its bound natively, CBC's is parsed from the log pulp is handed as logPath.
+        A proven solve has nothing left open, the way CBC's log prints no bound for one.
+        """
         if not stats.has_solution:
             return None
         if stats.status in PROVEN:
             return 0.
-        info = self.problem.solverModel.getInfo()
-        if not (isfinite(info.objective_function_value) and isfinite(info.mip_dual_bound)):
+        if stats.best_bound is None:
             return None
-        return abs(info.mip_dual_bound - info.objective_function_value) / scale
+        return abs(stats.best_bound - stats.objective) / scale
 
     @contextmanager
     def _timed(self, stage):
@@ -912,26 +910,6 @@ class Optimizer:
         finally:
             self.stage_seconds[stage] = round(
                 self.stage_seconds.get(stage, 0.) + time.monotonic() - started, 4)
-
-    @staticmethod
-    def _cbc_gap(log_path, scale) -> float | None:
-        """Distance between CBC's schedule and its bound, from the log, in currency.
-
-        The solution file carries no bound, only the log does: a proven solve prints none and the
-        gap is zero, a stopped one prints the bound it reached.
-        """
-        # no log, no solver run behind the values, see the faked stages in the tests
-        if not os.path.exists(log_path):
-            return None
-        with open(log_path) as log:
-            text = log.read()
-        value = re.search(r'^Objective value:\s+(\S+)', text, re.MULTILINE)
-        if value is None:
-            return None
-        bound = re.search(r'^(?:Lower|Upper) bound:\s+(\S+)', text, re.MULTILINE)
-        if bound is None:
-            return 0.
-        return abs(float(bound.group(1)) - float(value.group(1))) / scale
 
     def _pin_integers(self):
         """Freeze every integer variable on the value it currently holds, undo data returned.
@@ -1271,10 +1249,10 @@ class Optimizer:
         reserve = (0. if self.settings.time_limit is None
                    else self.settings.time_limit * PREFERENCE_TIME_SHARE)
         remaining = None if deadline is None else max(min(COST_TIME_LIMIT, deadline - reserve - time.monotonic()), 0.1)
-        log_path = os.path.join(tmpdir, 'cost.log')
         with self._timed('cost'):
-            self.stats = self.problem.solve(self._solver(tmpdir, timeLimit=remaining, logPath=log_path, gapAbs=scaled_gap))
-        self.cost_stage_gap = self._stage_gap(self.stats, log_path, scale)
+            self.stats = self.problem.solve(self._solver(tmpdir, timeLimit=remaining, gapAbs=scaled_gap,
+                                                         logPath=os.path.join(tmpdir, 'cost.log')))
+        self.cost_stage_gap = self._stage_gap(self.stats, scale)
 
         if self.stats.has_solution and self._is_feasible():
             # the cost stage is allowed to stop on its gap, so proven is not required of it, only

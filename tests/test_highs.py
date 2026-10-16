@@ -34,13 +34,27 @@ def test_stored_optimum_without_gap(case):
     assert result['objective_value'] == pytest.approx(expected['objective_value'], abs=1e-4, rel=1e-5)
 
 
-def test_cost_stage_gap_comes_from_the_solver_model():
-    # pulp 4 leaves best_bound unset for HiGHS, so the gap is read from HiGHS itself
+def test_cost_stage_gap_comes_from_the_stats():
     optimizer = highs('026-attenuate-grid-peaks', probe_seconds=0)
     optimizer.solve()
 
     assert optimizer.solve_path == 'split'
     assert optimizer.cost_stage_gap == 0  # proven, nothing left open
+
+
+def test_stopped_cost_stage_reports_its_gap():
+    # the bound comes back in the problem's sense: a maximised cost objective with a bound above it
+    optimizer = highs('028-attenuate-grid-peaks-long-horizon')
+    optimizer.create_model()
+    scale = optimizer.objective_scale
+    optimizer.problem.setObjective(optimizer.cost_objective * scale)
+
+    with TemporaryDirectory() as tmpdir, optimizer._timed('cost'):
+        stats = optimizer.problem.solve(optimizer._solver(tmpdir, timeLimit=0.5))
+
+    assert stats.status == pulp.LpSolveStatus.TimeLimit
+    assert stats.best_bound > stats.objective
+    assert optimizer._stage_gap(stats, scale) == (stats.best_bound - stats.objective) / scale
 
 
 def test_overrunning_solve_is_interrupted_and_keeps_its_incumbent():

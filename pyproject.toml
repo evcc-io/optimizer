@@ -15,7 +15,7 @@ dependencies = [
     "matplotlib",
     "numpy>=2.5.4",
     "pandas>=2.3.3",
-    "pulp>=4.0.0",
+    "pulp>=4.0.1",
     "pydantic>=2.14.1",
     "pydantic-settings>=2.15.0",
     "pyjwt>=2.15.1",
