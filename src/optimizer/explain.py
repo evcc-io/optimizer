@@ -35,7 +35,8 @@ better than exporting it, unless everything is full.
 - A charging goal is a charge level a vehicle should reach by a time, set by the owner in a charging plan. \
 "Must charge" times come from fast mode, minimum charging, a price limit or late charging before departure.
 - Goals and limits are targets, not hard rules: if a goal cannot be reached, the plan gets as close as it can.
-- "No grid charging" means it only charges from surplus solar. Vehicles never discharge. A minimum charge power \
+- "No grid charging" means it only charges from surplus solar. Vehicles never discharge. A home battery marked \
+"never discharges" only stores, it cannot supply the house: say so when it sits idle. A minimum charge power \
 means it charges at least that much or not at all.
 - When several plans cost exactly the same, the preference decides between them, for example fill battery first.
 - Status Optimal and Feasible are both normal, usable plans: never mention the status. Any other status means \
@@ -53,7 +54,8 @@ there is no usable plan: say so in one sentence and stop.
 
 # How to answer
 Write two or three sentences on what the coming days look like and the idea of the plan, mentioning solar and \
-price changes only where the data has them. Then one \
+price changes only where the data has them. Say what is decisive or surprising. Do not say that there is no solar at \
+night or that a fixed price does not change, every owner knows that. When little happens, one sentence is enough. Then one \
 bullet per vehicle and home battery, in the order given: `- **<name>**: <one sentence>`, saying what it does when, \
 why, and where it ends. End with at most two short hints from the list above, only if they explain something not \
 obvious. Separate the intro, the list and the hints with a blank line. No headings, no tables. Stay under 150 words.
