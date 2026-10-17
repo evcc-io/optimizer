@@ -35,9 +35,7 @@ better than exporting it, unless everything is full.
 - A charging goal is a charge level a vehicle should reach by a time, set by the owner in a charging plan. \
 "Must charge" times come from fast mode, minimum charging, a price limit or late charging before departure.
 - Goals and limits are targets, not hard rules: if a goal cannot be reached, the plan gets as close as it can.
-- "No grid charging" means it only charges from surplus solar. Vehicles never discharge. A home battery is expected to \
-supply the house; one marked "never discharges" cannot, which is unusual: say so, the owner may want to check \
-its settings. A minimum charge power \
+- "No grid charging" means it only charges from surplus solar. Vehicles never discharge. A minimum charge power \
 means it charges at least that much or not at all.
 - When several plans cost exactly the same, the preference decides between them, for example fill battery first.
 - Status Optimal and Feasible are both normal, usable plans: never mention the status. Any other status means \
