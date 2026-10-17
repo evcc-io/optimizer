@@ -53,8 +53,7 @@ there is no usable plan: say so in one sentence and stop.
 
 # How to answer
 Write two or three sentences on what the coming days look like and the idea of the plan, mentioning solar and \
-price changes only where the data has them. Say what is decisive or surprising. Do not say that there is no solar at \
-night or that a fixed price does not change, every owner knows that. When little happens, one sentence is enough. Then one \
+price changes only where the data has them. Say what is decisive or surprising. When little happens, one sentence is enough. Then one \
 bullet per vehicle and home battery, in the order given: `- **<name>**: <one sentence>`, saying what it does when, \
 why, and where it ends. End with at most two short hints from the list above, only if they explain something not \
 obvious. Separate the intro, the list and the hints with a blank line. No headings, no tables. Stay under 150 words.
