@@ -1,6 +1,8 @@
 # Install uv
 FROM python:3.14-slim AS builder
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# the runtime stage copies only the venv: fail here if the image python does not satisfy requires-python
+ENV UV_PYTHON_DOWNLOADS=never
 
 # Change the working directory to the `app` directory
 WORKDIR /app

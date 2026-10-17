@@ -4,7 +4,7 @@ version = "0.2.0"
 description = "evcc optimizer"
 readme = "README.md"
 authors = [{ name = "andig", email = "andi@evcc.io" }, { name = "ekke" }]
-requires-python = "~=3.13.0"
+requires-python = ">=3.13"
 dependencies = [
     "azure-data-tables>=12.7.0",
     "azure-identity>=1.26.0",
