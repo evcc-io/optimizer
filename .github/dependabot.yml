@@ -8,6 +8,10 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    # the python minor follows requires-python in pyproject.toml, not the image tag
+    ignore:
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: "uv"
     directory: "/"
     schedule:

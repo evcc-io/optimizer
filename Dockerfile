@@ -1,5 +1,5 @@
 # Install uv
-FROM python:3.14-slim AS builder
+FROM python:3.13-slim AS builder
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Change the working directory to the `app` directory
@@ -22,7 +22,7 @@ ADD --checksum=sha256:f551e7b843e25becee466a447118f6f44f219c4e46cfb4670829ecd3cf
     https://github.com/coin-or/Cbc/releases/download/releases%2F2.10.10/Cbc-releases.2.10.10-x86_64-ubuntu22-gcc1130-static.tar.gz \
     /tmp/cbc.tar.gz
 
-FROM python:3.14-slim
+FROM python:3.13-slim
 
 # Create non-root user
 RUN groupadd -r app && useradd -r -g app -s /bin/false app
