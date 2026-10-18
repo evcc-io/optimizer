@@ -44,7 +44,7 @@ class OptimizerSettings(BaseSettings):
     azure_openai_endpoint: str | None = Field(default=None,
                                               description="Azure OpenAI resource the plan explanations are generated with, such as "
                                                           "https://name.openai.azure.com/. Unset disables /optimize/explain")
-    azure_openai_deployment: str = Field(default="gpt-6-luna", description="Deployment name of the chat model behind /optimize/explain")
+    azure_openai_deployment: str = Field(default="gpt-6.1-sol", description="Deployment name of the chat model behind /optimize/explain")
     azure_openai_key: str | None = Field(default=None, description="API key of the Azure OpenAI resource")
     feedback_table_endpoint: str | None = Field(default=None,
                                                 description="Azure table service the explanations and the votes on them are stored in, "
