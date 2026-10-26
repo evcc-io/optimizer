@@ -1,0 +1,44 @@
+name: Model issue
+description: The optimizer returns a wrong plan for a given request, or the model lacks a capability
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This repository is about the optimization model only: for a given request, which plan does the optimizer return?
+
+        Report everything about how evcc builds the request or applies the plan in the [evcc repository][evcc], for example:
+
+        - wrong or missing values in the request (forecasts, prices, battery SoC, limits, `p_a`, goals)
+        - batteries, vehicles or charging points missing from the request
+        - evcc not following the returned plan, battery modes, charging behaviour
+        - UI, configuration and devices
+
+        If you are unsure, start in the evcc repository. Issues not about the model will be closed.
+
+        [evcc]: https://github.com/evcc-io/evcc/issues
+  - type: checkboxes
+    id: model
+    attributes:
+      label: Scope
+      options:
+        - label: I have checked that the request is correct, and the problem is the plan the optimizer returns for it or a missing model capability.
+          required: true
+  - type: textarea
+    validations:
+      required: true
+    attributes:
+      label: Describe the problem
+      description: >-
+        What the optimizer plans, and what you expected instead and why. For a missing capability, describe what the model should support.
+  - type: textarea
+    attributes:
+      label: Request
+      render: json
+      description: >-
+        The request JSON sent to the optimizer. Required for a wrong plan, so the result can be reproduced.
+  - type: textarea
+    attributes:
+      label: Response or plan
+      description: >-
+        The response JSON or a screenshot of the plan, with the time steps that look wrong.
