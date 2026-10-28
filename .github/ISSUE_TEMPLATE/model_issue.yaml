@@ -7,14 +7,15 @@ body:
       value: |
         This repository is about the optimization model only: for a given request, which plan does the optimizer return?
 
-        Report everything about how evcc builds the request or applies the plan in the [evcc repository][evcc], for example:
+        evcc decides when the optimizer is invoked, which devices it sends and how, and with which data. Report everything that depends on this in the [evcc repository][evcc], for example:
 
         - wrong or missing values in the request (forecasts, prices, battery SoC, limits, `p_a`, goals)
-        - batteries, vehicles or charging points missing from the request
+        - household demand `gt` that is too high or too low, or contains loads it should not, e.g. a heating rod or heat pump running on PV surplus only
+        - devices modelled the wrong way, e.g. a flexible load sent as fixed demand, or batteries, vehicles or charging points missing from the request
         - evcc not following the returned plan, battery modes, charging behaviour
         - UI, configuration and devices
 
-        If you are unsure, start in the evcc repository. Issues not about the model will be closed.
+        Rule of thumb: if the plan would be right for the request as sent, the problem is in evcc. If you are unsure, start in the evcc repository. Issues not about the model will be closed.
 
         [evcc]: https://github.com/evcc-io/evcc/issues
   - type: checkboxes
@@ -22,7 +23,7 @@ body:
     attributes:
       label: Scope
       options:
-        - label: I have checked that the request is correct, and the problem is the plan the optimizer returns for it or a missing model capability.
+        - label: I have checked that the request is correct, i.e. every value and device in it matches my setup, and the plan is wrong for this request or the model lacks a capability.
           required: true
   - type: textarea
     validations:
