@@ -164,7 +164,6 @@ def ranges(series, labels):
 
 
 STRATEGIES = {
-    'charge_before_export': 'fill battery first',
     'attenuate_demand_peaks': 'reduce grid import peaks',
     'attenuate_feedin_peaks': 'reduce grid export peaks',
     'attenuate_grid_peaks': 'reduce grid peaks',
@@ -227,7 +226,10 @@ def digest(payload):
         'the plan reaches the grid export limit, surplus solar beyond it is lost' if violations.get('grid_export_limit_hit') else '',
     ]
     demands = [f"{DEMANDS[d['type']]} \"{d.get('title') or d['type']}\"" for d in details.get('demandDetails') or [] if d.get('type') in DEMANDS]
-    strategy = STRATEGIES.get((req.get('strategy') or {}).get('charging_strategy'), 'no preference')
+    strat = req.get('strategy') or {}
+    preferences = [STRATEGIES[strat['charging_strategy']]] if strat.get('charging_strategy') in STRATEGIES else []
+    preferences += ['charge early'] if strat.get('charge_early') else []
+    strategy = ', '.join(preferences) or 'no preference'
 
     lines = [
         f"Now: {labels[0]}. The plan runs until {labels[-1]}. Status {res['status']}. Preference: {strategy}.",

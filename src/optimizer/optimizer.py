@@ -18,6 +18,11 @@ from .settings import OptimizerSettings
 class OptimizationStrategy:
     charging_strategy: str
     discharging_strategy: str
+    # fill the batteries as early as the rest of the model allows. Orthogonal to
+    # charging_strategy, which says what to shape about the grid profile and not when to charge,
+    # so it combines with any of them - including none, which is what asking for an early charge
+    # and no profile shaping at all means.
+    charge_early: bool = False
 
 
 # charging strategies that level grid peaks, mapped to the metered sides they level.
@@ -32,7 +37,7 @@ PEAK_STRATEGY_SIDES = {
 # then solved without a strategy at all, which is indistinguishable from success in the response:
 # the schedule is cost optimal, the status says Optimal, and only the shape of the profile gives it
 # away. Listed here next to the code that reads them so the API can reject the rest up front.
-CHARGING_STRATEGIES = ('none', 'charge_before_export', *PEAK_STRATEGY_SIDES)
+CHARGING_STRATEGIES = ('none', *PEAK_STRATEGY_SIDES)
 DISCHARGING_STRATEGIES = ('none', 'discharge_before_import')
 
 # magnitude the largest objective coefficient is placed at before the model goes to the solver.
@@ -349,6 +354,18 @@ class Optimizer:
         # grid sides leveled by the active peak attenuation strategy, empty for all other strategies
         self.peak_sides = PEAK_STRATEGY_SIDES.get(strategy.charging_strategy, ())
 
+        # weights charge_early fills the batteries early at: prc_e_early defers export, prc_n_early
+        # pulls import forward. Attenuation outranks earliness, so a leveled side stays four orders
+        # below prc_p_peak. An unleveled export side takes the charge_before_export coefficient
+        # this option replaced, (T - t) / T explains the factor T, the battery count is a latent
+        # bug of that coefficient kept to leave its schedules unchanged. Import always stays at
+        # the tie break weight: pulling it forward buys a different price, a larger weight trades
+        # real money for it (0.37 ct on case 009).
+        early_unprotected = self.min_import_price * 2e-5 * self.T * len(self.batteries)
+        early_protected = self.penalty_base * 1e-7
+        self.prc_e_early = early_protected if 'exp' in self.peak_sides else early_unprotected
+        self.prc_n_early = early_protected
+
     def create_model(self):
         """
         Create and initialize the MILP model
@@ -564,12 +581,6 @@ class Optimizer:
         # Secondary strategies to implement preferences without impact to actual cost
         preference = 0
 
-        # prefer charging first, then grid export
-        if self.strategy.charging_strategy == 'charge_before_export':
-            for i, bat in enumerate(self.batteries):
-                for t in self.time_steps:
-                    preference += - self.variables['e'][t] * self.min_import_price * 2e-5 * (self.T - t)
-
         # level the grid profile to unload the public grid from peaks. attenuate_demand_peaks levels
         # grid import, attenuate_feedin_peaks levels grid export, attenuate_grid_peaks levels both.
         # the penalty sits on the horizon maximum instead of on charge power, so the optimizer
@@ -579,6 +590,13 @@ class Optimizer:
         # this penalty into a reward for peaks.
         for side in self.peak_sides:
             preference += - self.variables[f'p_{side}_peak'] * self.prc_p_peak
+
+        # fill the batteries early. The peak says how high the grid profile may go, not when the
+        # batteries fill, and under flat prices nothing else decides it either.
+        if self.strategy.charge_early:
+            for t in self.time_steps:
+                preference += - self.variables['e'][t] * self.prc_e_early * (self.T - t) / self.T
+                preference += - self.variables['n'][t] * self.prc_n_early * t / self.T
 
         # prefer discharging batteries completely before importing from grid
         if self.strategy.discharging_strategy == 'discharge_before_import':
