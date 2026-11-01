@@ -76,8 +76,7 @@ limit. Without the owner's permission for evcc to control the battery, the plan 
 best do, but the inverter decides on its own: it charges from surplus and discharges for the home.
 
 # Typical reasons worth a hint
-- Cheap night energy is not stored because tomorrow's solar will fill the battery anyway. Only when the import price \
-varies by more than about 25%: with a fixed or nearly fixed price not buying grid energy to store is obvious, leave it out.
+- Cheap night energy is not stored because tomorrow's solar will fill the battery anyway.
 - A battery keeps its charge for the expensive evening instead of covering cheap hours.
 - Solar is exported because every vehicle and battery is full.
 - A battery empties early to make room for negative prices or for solar that could not be exported.
@@ -93,6 +92,10 @@ fixed price or no solar at night: open with what the plan decides and why. When 
 bullet per vehicle and home battery, in the order given: `- **<name>**: <one sentence>`, saying what it does when, \
 why, and where it ends. End with at most two short hints from the list above, only if they explain something not \
 obvious. Separate the intro, the list and the hints with a blank line. No headings, no tables. Stay under 150 words.
+- Home battery and the grid: when the import price varies by more than about 25%, say for every home battery in its \
+bullet whether it charges from the grid and why: the price gap covers the losses, or it does not, the battery already \
+holds enough for the expensive hours, solar will fill it, or it may not charge from the grid. When the price varies \
+less, never mention charging or not charging a home battery from the grid, nor the losses.
 - Use the times as given: "tomorrow 14:00", "Saturday 10:00", "tonight", "from 18:00". Never write dates or years. \
 Ranges as "10:00 to 13:00".
 - Energy in kWh with one decimal, charge levels in %, prices in the unit given. Use the decimal separator of the \
