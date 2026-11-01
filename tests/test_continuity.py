@@ -7,7 +7,17 @@ import numpy as np
 import pulp
 import pytest
 
-from optimizer.optimizer import CONTINUITY_SPLIT_TIME_LIMIT, CONTINUITY_TIME_LIMIT, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
+from optimizer.optimizer import (
+    CONTINUITY_SPLIT_TIME_SHARE,
+    CONTINUITY_TIME_SHARE,
+    REFERENCE_TIME_LIMIT,
+    BatteryConfig,
+    GridConfig,
+    OptimizationStrategy,
+    Optimizer,
+    TimeSeriesData,
+)
+from optimizer.settings import OptimizerSettings
 
 
 def build(strategy: str = 'none') -> Optimizer:
@@ -65,11 +75,11 @@ def test_equal_prices_prefer_one_session(monkeypatch: pytest.MonkeyPatch, probe_
 @pytest.mark.parametrize('stage_seconds, expected_starts, expected_stage', [
     # the candidate cannot beat the clock of the solve that produced the incumbent, so a solve
     # that already took longer than the stage may spend gets no candidate at all
-    ({'probe': CONTINUITY_TIME_LIMIT + 1}, 3, 'skipped'),
+    ({'probe': CONTINUITY_TIME_SHARE * REFERENCE_TIME_LIMIT + 1}, 3, 'skipped'),
     # on the split path the probe spent its clock on the joint objective and failed, so it says
     # nothing about the candidate; the cost stage it extends does. Counting the probe skipped the
     # stage on every split request, the probe alone being PROBE_SHARE of the time limit (#170)
-    ({'probe': CONTINUITY_TIME_LIMIT + 1, 'cost': 0.1}, 1, 'improved 3 to 1'),
+    ({'probe': CONTINUITY_TIME_SHARE * REFERENCE_TIME_LIMIT + 1, 'cost': 0.1}, 1, 'improved 3 to 1'),
 ])
 def test_continuity_is_gated_by_the_clock_of_the_stage_it_extends(
         monkeypatch: pytest.MonkeyPatch, stage_seconds: dict[str, float], expected_starts: int, expected_stage: str):
@@ -90,16 +100,26 @@ def test_continuity_is_gated_by_the_clock_of_the_stage_it_extends(
     assert ('continuity' in model.stage_seconds) == expected_stage.startswith('improved')
 
 
-@pytest.mark.parametrize('path, cap', [('joint', CONTINUITY_TIME_LIMIT), ('split', CONTINUITY_SPLIT_TIME_LIMIT)])
-def test_split_gets_the_longer_continuity_clock(path: str, cap: float):
+@pytest.mark.parametrize('path, share', [('joint', CONTINUITY_TIME_SHARE), ('split', CONTINUITY_SPLIT_TIME_SHARE)])
+def test_split_gets_the_longer_continuity_clock(path: str, share: float):
     # the joint path is most of the traffic, the split has paid for a probe that proved nothing
     # and has clock left; both stay inside the deadline
     model = build()
     model.solve_path = path
     model.stage_seconds = {'probe': 0.5, 'cost': 0.5}
 
-    assert model._continuity_clock(None) == cap
+    assert model._continuity_clock(None) == share * REFERENCE_TIME_LIMIT
     assert model._continuity_clock(time.monotonic() + 0.5) == pytest.approx(0.5, abs=0.05)
+
+
+def test_continuity_clock_scales_with_the_time_limit():
+    # a slower host raises the time limit, the gate and the cap follow it
+    model = build()
+    model.settings = OptimizerSettings(time_limit=4 * REFERENCE_TIME_LIMIT)
+    model.solve_path = 'joint'
+    model.stage_seconds = {'probe': 2 * CONTINUITY_TIME_SHARE * REFERENCE_TIME_LIMIT}
+
+    assert model._continuity_clock(None) == pytest.approx(4 * CONTINUITY_TIME_SHARE * REFERENCE_TIME_LIMIT)
 
 
 @pytest.mark.parametrize('schedule', [(0, 500, 0, 500, 0, 500), (0, 500, 500, 500, 0, 0)])
