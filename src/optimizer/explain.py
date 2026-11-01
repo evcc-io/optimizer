@@ -76,7 +76,8 @@ limit. Without the owner's permission for evcc to control the battery, the plan 
 best do, but the inverter decides on its own: it charges from surplus and discharges for the home.
 
 # Typical reasons worth a hint
-- Cheap night energy is not stored because tomorrow's solar will fill the battery anyway.
+- Cheap night energy is not stored because tomorrow's solar will fill the battery anyway. Only when the import price \
+varies by more than about 25%: with a fixed or nearly fixed price not buying grid energy to store is obvious, leave it out.
 - A battery keeps its charge for the expensive evening instead of covering cheap hours.
 - Solar is exported because every vehicle and battery is full.
 - A battery empties early to make room for negative prices or for solar that could not be exported.
