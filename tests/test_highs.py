@@ -23,7 +23,7 @@ def test_stored_optimum_without_gap(case):
     # the stored objectives are proven optima. At the production gap HiGHS may stop anywhere
     # within it, as CBC does, so compare where neither may stop early. The whole time limit goes
     # to the joint solve: a slow runner past the default probe share falls back to the split, whose
-    # cost stage is capped at COST_TIME_LIMIT and returns a feasible, unproven schedule
+    # cost stage is capped at COST_TIME_SHARE of the limit and returns a feasible, unproven schedule
     expected = json.loads(pathlib.Path(f'test_cases/{case}.json').read_text()).get('expected_response')
     if expected is None or 'objective_value' not in expected:
         pytest.skip('no stored objective')

@@ -144,7 +144,7 @@ PROBE_SHARE = 0.2
 #
 # Sized to seat the stage and no more: a reserve too small to seat it is worse than none, idle
 # time the cost stage could have used, and a reserve larger than the stage can spend is the same
-# idle time on the other side. The MILP tie break is capped at MILP_PREFERENCE_TIME_LIMIT; 0.25 of
+# idle time on the other side. The MILP tie break is capped at MILP_PREFERENCE_TIME_SHARE; 0.25 of
 # the production 10 s limit seated that cap at 2.5 s with the LP floors in the margin, and what
 # the lower cap leaves of the slice returns as response time. This was
 # 0.4 before the cap existed, and production paid for it: the revision that introduced the reserve
@@ -170,7 +170,12 @@ STATUS_LABELS = {
     'Undefined': 'Undefined',
 }
 
-# clock the tie break MILP may spend. Distinct from PREFERENCE_TIME_SHARE, which is what the
+# The stage clocks below are shares of OPTIMIZER_TIME_LIMIT, measured as seconds on the production
+# limit of REFERENCE_TIME_LIMIT. A slower host raises the limit and every stage scales with it.
+# Stages that cap themselves without a time limit take their share of the reference.
+REFERENCE_TIME_LIMIT = 10.0
+
+# share the tie break MILP may spend. Distinct from PREFERENCE_TIME_SHARE, which is what the
 # cost stage may not eat: the reserve seats the stage, this caps its spend. Measured over 16
 # captured production splits on CBC, the MILP found everything it would find within 2.5 s. On
 # HiGHS the stage is the one that hits its cap: 44 of 53 benchmark splits ran the full 2.5 s and
@@ -178,14 +183,14 @@ STATUS_LABELS = {
 # against 0.03 percent on CBC. Capping at 1 s cut the mixed benchmark's sum by 13 percent and
 # p95 from 8.7 to 7.2 s with the preference value unchanged beyond seed noise (1 worse, 1 better
 # of 170). Requests without a time limit stay uncapped, they asked to be solved out.
-MILP_PREFERENCE_TIME_LIMIT = 1.0
+MILP_PREFERENCE_TIME_SHARE = 0.1
 
-# clock the cost stage may spend on a split. Absolute rather than what the reserve leaves of the
+# share the cost stage may spend on a split. Fixed rather than what the reserve leaves of the
 # limit: the stage is anytime branch and bound and consumes whatever it is offered, so on the
 # production 10 s limit every split ran 5.4 s of it and 17 percent of them ended past the limit.
 # The split is 3 percent of the traffic and 38 percent of the CPU. Whether the seconds past 3 buy
 # money is what cost_stage_gap is logged to answer. Requests without a time limit stay uncapped.
-COST_TIME_LIMIT = 3.0
+COST_TIME_SHARE = 0.3
 
 # clock the pinned LP tie break may use. It is a linear program over a schedule that is already
 # feasible, worst measured 0.165 s over the stored cases, so this is a guard against a pathological
@@ -193,16 +198,16 @@ COST_TIME_LIMIT = 3.0
 # spent its whole clock on the money gets no strategy at all.
 LP_PREFERENCE_TIME_LIMIT = 1.0
 
-# solve time above which the continuity stage is not tried at all, and the clock the candidate
-# gets on the joint path, see _continuity_clock. The joint path is 97 % of the traffic and a tenth
-# of a second there is replicas: one cap for every path at 2.5 s lifted its mean solve from 0.57
-# to 0.67 s within minutes, for a split improvement rate of 6.4 instead of 4.9 %.
-CONTINUITY_TIME_LIMIT = 1.0
-# clock the candidate gets on a split. That request has paid for a probe that proved nothing and
+# share of solve time above which the continuity stage is not tried at all, and the clock the
+# candidate gets on the joint path, see _continuity_clock. The joint path is 97 % of the traffic
+# and a tenth of a second there is replicas: one cap for every path at 2.5 s lifted its mean solve
+# from 0.57 to 0.67 s within minutes, for a split improvement rate of 6.4 instead of 4.9 %.
+CONTINUITY_TIME_SHARE = 0.1
+# share the candidate gets on a split. That request has paid for a probe that proved nothing and
 # ends around 5 to 6 s of the 10 s limit, so 2.5 s fits inside what is left, and 1 s was too short:
 # every split that ran the stage at 1 s ended at the cap, where the stored #170 request needs 1.1 s.
 # Both bounded by the request deadline.
-CONTINUITY_SPLIT_TIME_LIMIT = 2.5
+CONTINUITY_SPLIT_TIME_SHARE = 0.25
 CONTINUITY_TOLERANCE = 1e-5
 
 # grid energy variable and limit exceedance variable per leveled side
@@ -1026,8 +1031,7 @@ class Optimizer:
             stages.append('no time')
         else:
             if remaining is not None:
-                remaining = min(remaining, self.settings.time_limit * PREFERENCE_TIME_SHARE,
-                                MILP_PREFERENCE_TIME_LIMIT)
+                remaining = min(remaining, self._clock(MILP_PREFERENCE_TIME_SHARE))
             # no warm start, although a feasible solution is right there in the variables. CBC
             # 2.10.3, which pulp 3 bundled, mishandled a MIP start on this model: it returned a
             # strictly worse schedule and reported it as proven optimal, and it declared the model
@@ -1169,15 +1173,21 @@ class Optimizer:
         it skipped the stage on every split request (#170).
         """
         spent = self.stage_seconds.get('cost', self.stage_seconds.get('probe', 0.))
-        if spent > CONTINUITY_TIME_LIMIT:
+        gate = self._clock(CONTINUITY_TIME_SHARE)
+        if spent > gate:
             self.continuity_stage = f'skipped, solve took {spent:.1f} s'
             return None
-        cap = CONTINUITY_TIME_LIMIT if self.solve_path == 'joint' else CONTINUITY_SPLIT_TIME_LIMIT
+        cap = gate if self.solve_path == 'joint' else self._clock(CONTINUITY_SPLIT_TIME_SHARE)
         remaining = cap if deadline is None else min(cap, deadline - time.monotonic())
         if remaining <= 0:
             self.continuity_stage = 'no time'
             return None
         return remaining
+
+    def _clock(self, share: float) -> float:
+        """Seconds a stage gets as its share of the time limit, see REFERENCE_TIME_LIMIT."""
+        limit = REFERENCE_TIME_LIMIT if self.settings.time_limit is None else self.settings.time_limit
+        return share * limit
 
     def _gap_abs(self) -> float | None:
         """Absolute MIP gap for this request in currency units: gap_abs, raised to gap_share of the
@@ -1249,7 +1259,7 @@ class Optimizer:
         # use, see PREFERENCE_TIME_SHARE
         reserve = (0. if self.settings.time_limit is None
                    else self.settings.time_limit * PREFERENCE_TIME_SHARE)
-        remaining = None if deadline is None else max(min(COST_TIME_LIMIT, deadline - reserve - time.monotonic()), 0.1)
+        remaining = None if deadline is None else max(min(self._clock(COST_TIME_SHARE), deadline - reserve - time.monotonic()), 0.1)
         with self._timed('cost'):
             self.stats = self.problem.solve(self._solver(tmpdir, timeLimit=remaining, gapAbs=scaled_gap,
                                                          logPath=os.path.join(tmpdir, 'cost.log')))

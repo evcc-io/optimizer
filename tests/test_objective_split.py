@@ -10,7 +10,7 @@ import pytest
 
 from optimizer.optimizer import (
     COST_BOUND_SLACK,
-    MILP_PREFERENCE_TIME_LIMIT,
+    MILP_PREFERENCE_TIME_SHARE,
     PREFERENCE_TIME_SHARE,
     BatteryConfig,
     GridConfig,
@@ -82,7 +82,7 @@ def solve_cost_only(optimizer):
 
 
 def test_the_milp_tie_break_spend_is_capped(monkeypatch):
-    # the reserve seats the stage, MILP_PREFERENCE_TIME_LIMIT caps what it spends: measured over
+    # the reserve seats the stage, MILP_PREFERENCE_TIME_SHARE caps what it spends: measured over
     # captured splits, everything the MILP finds arrives within the cap and the rest of the
     # reserved slice is pure response time
     optimizer = build('026-attenuate-grid-peaks')
@@ -98,7 +98,7 @@ def test_the_milp_tie_break_spend_is_capped(monkeypatch):
     optimizer.solve()
 
     # the MILP is the last solve, after the cost stage and the LP floor
-    assert limits[-1] == MILP_PREFERENCE_TIME_LIMIT
+    assert limits[-1] == pytest.approx(MILP_PREFERENCE_TIME_SHARE * 10)
     assert 'MILP' in optimizer.preference_stage
 
 
