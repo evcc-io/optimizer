@@ -3,7 +3,7 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from math import isfinite
+from math import ceil, isfinite
 from tempfile import TemporaryDirectory
 from typing import Dict, List, Optional
 
@@ -251,6 +251,22 @@ class TimeSeriesData:
     p_E: List[float]  # Export prices [currency unit/Wh]
 
 
+@dataclass
+class UncertaintyConfig:
+    """Forecast uncertainty the schedule hedges against, see _add_uncertainty_constraints."""
+    ft_dev: float = 0.  # share of the solar forecast that may fall short per step
+    gt_dev: float = 0.  # share of the demand forecast that may be exceeded per step
+    budget: float = 0.  # steps that deviate adversely at once, 0 disables the hedge
+
+    def active(self) -> bool:
+        return self.budget > 0 and (self.ft_dev > 0 or self.gt_dev > 0)
+
+
+# checkpoints the budgeted worst case is evaluated at, see _add_uncertainty_constraints. Each one
+# carries a dual variable per preceding step, so this caps the hedge at about 8 T variables. 16 doubles the solve time on the stored cases, 32 triples it.
+UNCERTAINTY_CHECKPOINTS = 16
+
+
 class Optimizer:
     """
     Optimizer class building the MILP model from the input data, and provides
@@ -258,7 +274,8 @@ class Optimizer:
     """
 
     def __init__(self, strategy: OptimizationStrategy, grid: GridConfig, batteries: List[BatteryConfig], time_series: TimeSeriesData,
-                 eta_c: float = 0.95, eta_d: float = 0.95, M: float = 1e6, optimizer_settings: OptimizerSettings | None = None):
+                 eta_c: float = 0.95, eta_d: float = 0.95, M: float = 1e6, optimizer_settings: OptimizerSettings | None = None,
+                 uncertainty: UncertaintyConfig | None = None):
         """
         Optimizer Constructor
         """
@@ -269,6 +286,7 @@ class Optimizer:
         self.grid = grid
         self.batteries = batteries
         self.time_series = time_series
+        self.uncertainty = uncertainty or UncertaintyConfig()
         self.eta_c = eta_c
         self.eta_d = eta_d
         self.M = M
@@ -366,6 +384,7 @@ class Optimizer:
         self._setup_target_function()
         self._add_energy_balance_constraints()
         self._add_battery_constraints()
+        self._add_uncertainty_constraints()
 
     def _setup_variables(self):
         """
@@ -484,6 +503,25 @@ class Optimizer:
                 for t in self.time_steps
             ] if bat.c_max > 0 or bat.d_max > 0 else [0] * self.T
 
+        # hedge against forecast errors, see _add_uncertainty_constraints. All continuous.
+        if self.uncertainty.active():
+            # net deviation per step not absorbed by export, Wh. Steps without a deviation stay 0
+            self.variables['u_dev'] = [self.problem.add_variable(f"u_dev_{t}", lowBound=0) if self._deviation(t) > 0 else 0
+                                       for t in self.time_steps]
+            # worst case cumulative deviation under the budget, the dual of its selection per checkpoint
+            self.variables['u_lambda'] = {c: self.problem.add_variable(f"u_lambda_{c}", lowBound=0) for c in self._checkpoints()}
+            self.variables['u_mu'] = {c: [self.problem.add_variable(f"u_mu_{c}_{t}", lowBound=0) if self._deviation(t) > 0 else 0
+                                          for t in range(c + 1)] for c in self._checkpoints()}
+            # extra grid import covering the deviation, and its running sum, Wh
+            self.variables['u_imp'] = [self.problem.add_variable(f"u_imp_{t}", lowBound=0) for t in self.time_steps]
+            self.variables['u_imp_sum'] = [self.problem.add_variable(f"u_imp_sum_{t}", lowBound=0) for t in self.time_steps]
+            # export the deviation takes away, Wh, and the dual of its worst case over the budget
+            self.variables['u_lost'] = [self.problem.add_variable(f"u_lost_{t}", lowBound=0) if self._deviation(t) > 0 else 0
+                                        for t in self.time_steps]
+            self.variables['u_lost_lambda'] = self.problem.add_variable("u_lost_lambda", lowBound=0)
+            self.variables['u_lost_mu'] = [self.problem.add_variable(f"u_lost_mu_{t}", lowBound=0) if self._deviation(t) > 0 else 0
+                                           for t in self.time_steps]
+
     def _setup_target_function(self):
         """
         Gather all target function contributions and instantiate the objective
@@ -560,6 +598,16 @@ class Optimizer:
                 # negative target function contribution in a maximizing optimization
                 # decrease penalty slightly over time to push limit exceeding to late times
                 objective += - self.prc_e_grid_exp_pen * (1.0 - t * 1e-5) * self.variables['e_exp_lim_exc'][t]
+
+        # cost of the budgeted forecast error: the extra import it forces, at the import price of
+        # the step it is drawn in, and the export it takes away. A negative price would reward
+        # drawing more, so it is floored at zero. The export loss is dualised in units of
+        # penalty_base so its coefficients stay at the price magnitude the scaling anchors on.
+        if self.uncertainty.active():
+            for t in self.time_steps:
+                objective -= self.variables['u_imp'][t] * max(self.time_series.p_N[t], 0)
+            objective -= self.penalty_base * (min(self.uncertainty.budget, self.T) * self.variables['u_lost_lambda']
+                                              + pulp.lpSum(self.variables['u_lost_mu']))
 
         # everything above is real money. It is kept separate from the preference terms below
         # because solve() optimizes the two in sequence, see _solve_preferences().
@@ -823,6 +871,85 @@ class Optimizer:
                 # Charge constraint
                 self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
                                  * (1 - self.variables['z_cd'][i][t]))
+
+    def _deviation(self, t: int) -> float:
+        """Adverse forecast deviation of step t in Wh: less solar and more demand at once."""
+        return self.uncertainty.ft_dev * self.time_series.ft[t] + self.uncertainty.gt_dev * self.time_series.gt[t]
+
+    def _checkpoints(self) -> list[int]:
+        """Steps the budgeted worst case is evaluated at, the last step always among them."""
+        spacing = max(1, ceil(self.T / UNCERTAINTY_CHECKPOINTS))
+        return sorted({*range(spacing - 1, self.T, spacing), self.T - 1})
+
+    def _add_uncertainty_constraints(self):
+        """
+        Hedge the schedule against forecast errors with an uncertainty budget (Bertsimas and Sim).
+
+        Every step may deliver ft_dev less solar and gt_dev more demand than forecast, but no more
+        than `budget` steps do so at once. The schedule stays as planned, the deviation is absorbed
+        in this order: export the step had planned, the energy the batteries hold above s_min, and
+        extra grid import at that step's price. The worst case over which steps deviate is the sum
+        of the largest net deviations within the budget, which the dual pair lambda and mu evaluates
+        exactly at each checkpoint. Between checkpoints the last evaluated value stands, so a
+        deviation is recognised up to one spacing late.
+
+        Extra import is bounded by what the schedule discharges at that step plus what the
+        checkpoint just recognised: it replaces a discharge the shortfall has made impossible, or
+        covers the shortfall as it arrives, and cannot be booked ahead at a cheaper price.
+
+        The export a deviation takes away is lost revenue, priced the same way over the budget.
+        Without it, exporting instead of storing would hedge for free and win the tie against
+        storing; with it the two cost the same in the worst case and the preferences decide.
+        """
+        if not self.uncertainty.active():
+            return
+
+        reserve_batteries = [i for i, bat in enumerate(self.batteries) if bat.d_max > 0]
+        checkpoints = self._checkpoints()
+        budget = min(self.uncertainty.budget, self.T)
+
+        for t in self.time_steps:
+            if self._deviation(t) <= 0:
+                continue
+            absorbed = self.variables['e'][t]
+            curtailed = self.variables['e_exp_lim_exc'][t] if 'e_exp_lim_exc' in self.variables else 0
+            self.problem += self.variables['u_dev'][t] >= self._deviation(t) - absorbed - curtailed
+            self.problem += self.variables['u_lost'][t] >= self._deviation(t) - self.variables['u_dev'][t] - curtailed
+            self.problem += (self.variables['u_lost_lambda'] + self.variables['u_lost_mu'][t]
+                             >= self.variables['u_lost'][t] * max(self.time_series.p_E[t], 0) / self.penalty_base)
+
+        worst = {}
+        for c in checkpoints:
+            for t in range(c + 1):
+                if self._deviation(t) > 0:
+                    self.problem += self.variables['u_lambda'][c] + self.variables['u_mu'][c][t] >= self.variables['u_dev'][t]
+            worst[c] = budget * self.variables['u_lambda'][c] + pulp.lpSum(self.variables['u_mu'][c])
+
+        for previous, c in zip(checkpoints, checkpoints[1:]):
+            self.problem += worst[c] >= worst[previous]
+
+        recognised = 0
+        last = None
+        for t in self.time_steps:
+            running = self.variables['u_imp_sum'][t]
+            self.problem += running == (self.variables['u_imp_sum'][t - 1] if t > 0 else 0) + self.variables['u_imp'][t]
+
+            # what the checkpoint at this step adds to the recognised worst case
+            arriving = 0
+            if t in worst:
+                arriving = worst[t] - recognised
+                recognised = worst[t]
+                last = t
+
+            discharge = pulp.lpSum(self.variables['d'][i][t] for i in reserve_batteries)
+            self.problem += self.variables['u_imp'][t] <= discharge + arriving
+
+            if last is None:
+                continue
+            reserve = pulp.lpSum(self.variables['s'][i][t] - self.batteries[i].s_min + self.variables['s_min_pen'][i][t]
+                                 for i in reserve_batteries)
+            self.problem += running >= recognised - reserve
+            self.problem += running <= recognised
 
     def _stage_solver(self) -> str:
         """The solver of the stage being timed: hybrid proves the joint probe on CBC and runs the rest on HiGHS.
@@ -1433,7 +1560,8 @@ class Optimizer:
 
     def get_clean_objective_value(self):
         '''
-        recalculate the objective value without penalties and strategy icentives
+        recalculate the objective value without penalties, strategy incentives and the hedge
+        against forecast errors, which is money only an adverse forecast error would cost
         '''
         clean_objective = 0
         # Grid import cost (negative because we want to minimize cost) [currency unit]
