@@ -860,6 +860,19 @@ class Optimizer:
         solver.tmpDir = tmpdir
         return solver
 
+    def _solve(self, solver) -> pulp.LpSolveStats:
+        """Solve the problem, a HiGHS run that returns an incomplete solution counting as none.
+
+        pulp's HiGHS interface indexes the row solution by constraint id without checking its length,
+        and raises IndexError when HiGHS hands back fewer rows than the model has. In production this
+        turned up to 0.06 % of the requests into a 500, in the cost stage.
+        """
+        try:
+            return self.problem.solve(solver)
+        except IndexError as err:
+            print(f"{solver.name} returned an incomplete solution, treating it as none: {err!r}")
+            return pulp.LpSolveStats(solver=solver.name)
+
     def _interrupt(self, callback_type, message, data_out, data_in, user_data):
         """HiGHS interrupt callback: stop the solve once the _hard_limit deadline has passed.
 
@@ -1008,7 +1021,7 @@ class Optimizer:
         pinned = self._pin_integers()
         try:
             with self._timed('tie_break'):
-                stats = self.problem.solve(self._solver(tmpdir, timeLimit=LP_PREFERENCE_TIME_LIMIT))
+                stats = self._solve(self._solver(tmpdir, timeLimit=LP_PREFERENCE_TIME_LIMIT))
                 # CBC declares this LP infeasible on ~6% of production splits, over a bound the
                 # incumbent it just returned satisfies, see COST_BOUND_SLACK_CEILING. Walk the
                 # slack up until CBC can hold the row; keep() follows via budget.
@@ -1017,7 +1030,7 @@ class Optimizer:
                     slack *= 10
                     budget = self.settings.preference_budget + slack
                     slack_var.upBound = slack
-                    stats = self.problem.solve(self._solver(tmpdir, timeLimit=LP_PREFERENCE_TIME_LIMIT))
+                    stats = self._solve(self._solver(tmpdir, timeLimit=LP_PREFERENCE_TIME_LIMIT))
             label = 'LP' if slack == COST_BOUND_SLACK else f'LP (slack {slack:g})'
             stages.append(label + ' ' + stats.status_str + ('' if keep(stats) else ' unused'))
         finally:
@@ -1041,7 +1054,7 @@ class Optimizer:
             # come back identical to the cold run on CBC 2.10.13, but the image ships 2.10.10 and
             # that one has not been checked, so this stays until it is.
             with self._timed('tie_break'):
-                stats = self.problem.solve(self._solver(tmpdir, timeLimit=remaining))
+                stats = self._solve(self._solver(tmpdir, timeLimit=remaining))
             stages.append('MILP ' + stats.status_str + ('' if keep(stats) else ' unused'))
 
         self.preference_stage = ', '.join(stages)
@@ -1228,7 +1241,7 @@ class Optimizer:
         if probe != 0:
             try:
                 with self._timed('probe'):
-                    self.stats = self.problem.solve(self._solver(tmpdir, timeLimit=probe, gapAbs=scaled_gap))
+                    self.stats = self._solve(self._solver(tmpdir, timeLimit=probe, gapAbs=scaled_gap))
             except pulp.PulpSolverError as err:
                 # the probe is a shortcut, not the answer. A solver that fails on it (a non-zero
                 # exit once the clock stopped it has been reported) must not take the request down
@@ -1261,8 +1274,8 @@ class Optimizer:
                    else self.settings.time_limit * PREFERENCE_TIME_SHARE)
         remaining = None if deadline is None else max(min(self._clock(COST_TIME_SHARE), deadline - reserve - time.monotonic()), 0.1)
         with self._timed('cost'):
-            self.stats = self.problem.solve(self._solver(tmpdir, timeLimit=remaining, gapAbs=scaled_gap,
-                                                         logPath=os.path.join(tmpdir, 'cost.log')))
+            self.stats = self._solve(self._solver(tmpdir, timeLimit=remaining, gapAbs=scaled_gap,
+                                                  logPath=os.path.join(tmpdir, 'cost.log')))
         self.cost_stage_gap = self._stage_gap(self.stats, scale)
 
         if self.stats.has_solution and self._is_feasible():
