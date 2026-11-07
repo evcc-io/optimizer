@@ -14,9 +14,10 @@ from optimizer.app import app, settings
 
 @pytest.mark.parametrize('test_case', pathlib.Path('test_cases').glob('*.json'))
 def test_optimizer(test_case: pathlib.Path, monkeypatch):
-    # stored objectives are proven optima. The production gap may stop a cent or two short of
-    # them, 020 lands 1.2 ct below at 2 ct, so compare at the one cent they were recorded with
-    monkeypatch.setenv("OPTIMIZER_GAP_ABS", "0.01")
+    # stored objectives are proven optima, so compare with the gap closed. Any open gap lets each
+    # CBC build stop on an incumbent of its own: at one cent 020 lands 0.6 ct short on CBC 2.10.13
+    # and on the optimum with the 2.10.10 build CI pins. Closed, the suite runs no slower
+    monkeypatch.setenv("OPTIMIZER_GAP_ABS", "0")
     client = app.test_client()
 
     test_data = json.loads(test_case.read_text())
