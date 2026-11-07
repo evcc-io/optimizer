@@ -41,8 +41,6 @@ body:
       description: >-
         The request JSON sent to the optimizer, copied from Raw Data > Request on the evcc optimizer page, so the result can be reproduced.
   - type: textarea
-    validations:
-      required: true
     attributes:
       label: Demand
       description: >-
