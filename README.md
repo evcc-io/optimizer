@@ -46,6 +46,20 @@ The maximum is a single value out of the horizon, which leaves one gap: a load s
   <img alt="Charging plan with attenuate_grid_peaks: the battery refill spread over the solar window and the feed-in held to a flat 1 kW plateau" src="docs/img/example-peak-light.png">
 </picture>
 
+## Hedging against forecast errors
+
+A schedule on the forecast alone is a bet that the forecast holds. When the solar falls short or the demand runs higher, a battery drained to its minimum overnight leaves the evening to the grid at the evening price. The optional `uncertainty` block makes that risk part of the cost.
+
+```json
+"uncertainty": {"ft_dev": 0.3, "gt_dev": 0.2, "budget": 8}
+```
+
+Every step may deliver `ft_dev` less solar and `gt_dev` more demand than forecast, but at most `budget` steps do so at once. That is the uncertainty budget of Bertsimas and Sim: a budget of 0 trusts the forecast, a budget of the full horizon assumes every step goes wrong, which hardly ever happens and buys a lot of insurance. Something like a quarter of the horizon covers the usual bad afternoon. The budget may be fractional.
+
+The schedule itself stays as planned. What the model prices is the recourse: a shortfall first eats the export the step had planned, then the energy the batteries hold above their minimum, and whatever is left is imported at that step's price. The worst case over which steps deviate is evaluated exactly at up to 16 checkpoints across the horizon, so a long horizon recognises a deviation up to a few steps late. The hedge adds continuous variables and rows only, no binaries, so the solve stays a comparable size.
+
+The reported `objective_value` is the plan's worth on the forecast as sent. A hedged plan scores a little worse there, that is the premium paid for the cover.
+
 ## How a request is solved
 
 One request is up to five solver runs under one wall clock, `OPTIMIZER_TIME_LIMIT` (10 s in production). The stage clocks are shares of it, so a slower host raises the limit and every stage scales with it. Each stage keeps what the previous one found unless it can improve on it without spending money. The request log carries where the clock went (`stages`), which path was taken (`path`), what the tie break (`preferences`) and the continuity pass (`continuity`) did, and what the cost stage found (`cost_stage_value`) against what it could not rule out (`cost_stage_gap`, currency, zero when proven).
