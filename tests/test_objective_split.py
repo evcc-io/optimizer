@@ -255,3 +255,16 @@ def test_the_lp_floor_decides_the_tie_with_no_clock_left(case):
         f'the MILP stage ran anyway, {optimizer.preference_stage}'
     assert pulp.value(optimizer.preference_objective) > undecided, \
         f'preferences after the floor {pulp.value(optimizer.preference_objective)}, before {undecided}'
+
+
+def test_an_incomplete_highs_solution_is_no_answer_not_a_500(monkeypatch):
+    # production: pulp's HiGHS interface raised IndexError reading the row solution of the cost
+    # stage, which turned the request into a 500. It must come back as no schedule instead.
+    optimizer = build(CASES[0])
+    optimizer.settings.probe_seconds = 0
+
+    def incomplete(self, solver):
+        raise IndexError('list index out of range')
+
+    monkeypatch.setattr(pulp.LpProblem, 'solve', incomplete)
+    assert optimizer.solve()['status'] == 'Not Solved'
