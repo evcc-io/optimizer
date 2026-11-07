@@ -42,11 +42,6 @@ body:
         The request JSON sent to the optimizer, copied from Raw Data > Request on the evcc optimizer page, so the result can be reproduced.
   - type: textarea
     attributes:
-      label: Demand
-      description: >-
-        A screenshot of the Environment table on the evcc optimizer page, showing which loads make up the household demand.
-  - type: textarea
-    attributes:
       label: Response or plan
       description: >-
         The response JSON or a screenshot of the plan, with the time steps that look wrong.
