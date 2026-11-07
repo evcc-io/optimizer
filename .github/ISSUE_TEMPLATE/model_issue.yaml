@@ -33,11 +33,20 @@ body:
       description: >-
         What the optimizer plans, and what you expected instead and why. For a missing capability, describe what the model should support.
   - type: textarea
+    validations:
+      required: true
     attributes:
       label: Request
       render: json
       description: >-
-        The request JSON sent to the optimizer. Required for a wrong plan, so the result can be reproduced.
+        The request JSON sent to the optimizer, copied from Raw Data > Request on the evcc optimizer page, so the result can be reproduced.
+  - type: textarea
+    validations:
+      required: true
+    attributes:
+      label: Demand
+      description: >-
+        A screenshot of the Environment table on the evcc optimizer page, showing which loads make up the household demand.
   - type: textarea
     attributes:
       label: Response or plan
