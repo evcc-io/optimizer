@@ -12,6 +12,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
+)
+
+// Defines values for ExplainFeedbackVote.
+const (
+	Down ExplainFeedbackVote = "down"
+	Up   ExplainFeedbackVote = "up"
 )
 
 // Defines values for OptimizationResultFlowDirection.
@@ -126,6 +133,70 @@ type Error struct {
 
 	// Message Error message describing what went wrong
 	Message string `json:"message,omitempty"`
+}
+
+// ExplainFeedback defines model for ExplainFeedback.
+type ExplainFeedback struct {
+	// Comment What was wrong or missing, optional
+	Comment string `json:"comment,omitempty"`
+
+	// Currency Currency of the prices
+	Currency string `json:"currency,omitempty"`
+
+	// Details Request details as evcc publishes them in its state, a timestamp per step and batteryDetails with title, type and capacity per battery
+	Details struct {
+		BatteryDetails []struct {
+			// Capacity kWh
+			Capacity float32 `json:"capacity,omitempty"`
+			Name     string  `json:"name,omitempty"`
+			Title    string  `json:"title,omitempty"`
+			Type     string  `json:"type,omitempty"`
+		} `json:"batteryDetails,omitempty"`
+		Timestamp []time.Time `json:"timestamp,omitempty"`
+	} `json:"details,omitempty"`
+
+	// Explanation The explanation as returned by /optimize/explain
+	Explanation string `json:"explanation"`
+
+	// Language Language of the explanation as an IETF tag
+	Language string             `json:"language,omitempty"`
+	Req      OptimizationInput  `json:"req"`
+	Res      OptimizationResult `json:"res"`
+
+	// Vote Whether the explanation helped
+	Vote ExplainFeedbackVote `json:"vote"`
+}
+
+// ExplainFeedbackVote Whether the explanation helped
+type ExplainFeedbackVote string
+
+// ExplainInput defines model for ExplainInput.
+type ExplainInput struct {
+	// Currency Currency of the prices
+	Currency string `json:"currency,omitempty"`
+
+	// Details Request details as evcc publishes them in its state, a timestamp per step and batteryDetails with title, type and capacity per battery
+	Details struct {
+		BatteryDetails []struct {
+			// Capacity kWh
+			Capacity float32 `json:"capacity,omitempty"`
+			Name     string  `json:"name,omitempty"`
+			Title    string  `json:"title,omitempty"`
+			Type     string  `json:"type,omitempty"`
+		} `json:"batteryDetails,omitempty"`
+		Timestamp []time.Time `json:"timestamp,omitempty"`
+	} `json:"details,omitempty"`
+
+	// Language Language of the explanation as an IETF tag
+	Language string             `json:"language,omitempty"`
+	Req      OptimizationInput  `json:"req"`
+	Res      OptimizationResult `json:"res"`
+}
+
+// ExplainResult defines model for ExplainResult.
+type ExplainResult struct {
+	// Explanation Explanation of the plan, markdown
+	Explanation string `json:"explanation,omitempty"`
 }
 
 // GridConfig defines model for GridConfig.
@@ -270,6 +341,12 @@ type TimeSeries struct {
 // PostOptimizeChargeScheduleJSONRequestBody defines body for PostOptimizeChargeSchedule for application/json ContentType.
 type PostOptimizeChargeScheduleJSONRequestBody = OptimizationInput
 
+// PostOptimizeExplainJSONRequestBody defines body for PostOptimizeExplain for application/json ContentType.
+type PostOptimizeExplainJSONRequestBody = ExplainInput
+
+// PostOptimizeExplainFeedbackJSONRequestBody defines body for PostOptimizeExplainFeedback for application/json ContentType.
+type PostOptimizeExplainFeedbackJSONRequestBody = ExplainFeedback
+
 // RequestEditorFn  is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
 
@@ -348,6 +425,16 @@ type ClientInterface interface {
 
 	PostOptimizeChargeSchedule(ctx context.Context, body PostOptimizeChargeScheduleJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// PostOptimizeExplainWithBody request with any body
+	PostOptimizeExplainWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PostOptimizeExplain(ctx context.Context, body PostOptimizeExplainJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PostOptimizeExplainFeedbackWithBody request with any body
+	PostOptimizeExplainFeedbackWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PostOptimizeExplainFeedback(ctx context.Context, body PostOptimizeExplainFeedbackJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetOptimizeHealth request
 	GetOptimizeHealth(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
@@ -366,6 +453,54 @@ func (c *Client) PostOptimizeChargeScheduleWithBody(ctx context.Context, content
 
 func (c *Client) PostOptimizeChargeSchedule(ctx context.Context, body PostOptimizeChargeScheduleJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPostOptimizeChargeScheduleRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostOptimizeExplainWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostOptimizeExplainRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostOptimizeExplain(ctx context.Context, body PostOptimizeExplainJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostOptimizeExplainRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostOptimizeExplainFeedbackWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostOptimizeExplainFeedbackRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostOptimizeExplainFeedback(ctx context.Context, body PostOptimizeExplainFeedbackJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostOptimizeExplainFeedbackRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -409,6 +544,86 @@ func NewPostOptimizeChargeScheduleRequestWithBody(server string, contentType str
 	}
 
 	operationPath := fmt.Sprintf("/optimize/charge-schedule")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewPostOptimizeExplainRequest calls the generic PostOptimizeExplain builder with application/json body
+func NewPostOptimizeExplainRequest(server string, body PostOptimizeExplainJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPostOptimizeExplainRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewPostOptimizeExplainRequestWithBody generates requests for PostOptimizeExplain with any type of body
+func NewPostOptimizeExplainRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/optimize/explain")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewPostOptimizeExplainFeedbackRequest calls the generic PostOptimizeExplainFeedback builder with application/json body
+func NewPostOptimizeExplainFeedbackRequest(server string, body PostOptimizeExplainFeedbackJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPostOptimizeExplainFeedbackRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewPostOptimizeExplainFeedbackRequestWithBody generates requests for PostOptimizeExplainFeedback with any type of body
+func NewPostOptimizeExplainFeedbackRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/optimize/explain/feedback")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -503,6 +718,16 @@ type ClientWithResponsesInterface interface {
 
 	PostOptimizeChargeScheduleWithResponse(ctx context.Context, body PostOptimizeChargeScheduleJSONRequestBody, reqEditors ...RequestEditorFn) (*PostOptimizeChargeScheduleResponse, error)
 
+	// PostOptimizeExplainWithBodyWithResponse request with any body
+	PostOptimizeExplainWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostOptimizeExplainResponse, error)
+
+	PostOptimizeExplainWithResponse(ctx context.Context, body PostOptimizeExplainJSONRequestBody, reqEditors ...RequestEditorFn) (*PostOptimizeExplainResponse, error)
+
+	// PostOptimizeExplainFeedbackWithBodyWithResponse request with any body
+	PostOptimizeExplainFeedbackWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostOptimizeExplainFeedbackResponse, error)
+
+	PostOptimizeExplainFeedbackWithResponse(ctx context.Context, body PostOptimizeExplainFeedbackJSONRequestBody, reqEditors ...RequestEditorFn) (*PostOptimizeExplainFeedbackResponse, error)
+
 	// GetOptimizeHealthWithResponse request
 	GetOptimizeHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetOptimizeHealthResponse, error)
 }
@@ -525,6 +750,55 @@ func (r PostOptimizeChargeScheduleResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r PostOptimizeChargeScheduleResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PostOptimizeExplainResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ExplainResult
+	JSON400      *Error
+	JSON502      *Error
+	JSON503      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r PostOptimizeExplainResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PostOptimizeExplainResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PostOptimizeExplainFeedbackResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON400      *Error
+	JSON502      *Error
+	JSON503      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r PostOptimizeExplainFeedbackResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PostOptimizeExplainFeedbackResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -573,6 +847,40 @@ func (c *ClientWithResponses) PostOptimizeChargeScheduleWithResponse(ctx context
 	return ParsePostOptimizeChargeScheduleResponse(rsp)
 }
 
+// PostOptimizeExplainWithBodyWithResponse request with arbitrary body returning *PostOptimizeExplainResponse
+func (c *ClientWithResponses) PostOptimizeExplainWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostOptimizeExplainResponse, error) {
+	rsp, err := c.PostOptimizeExplainWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostOptimizeExplainResponse(rsp)
+}
+
+func (c *ClientWithResponses) PostOptimizeExplainWithResponse(ctx context.Context, body PostOptimizeExplainJSONRequestBody, reqEditors ...RequestEditorFn) (*PostOptimizeExplainResponse, error) {
+	rsp, err := c.PostOptimizeExplain(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostOptimizeExplainResponse(rsp)
+}
+
+// PostOptimizeExplainFeedbackWithBodyWithResponse request with arbitrary body returning *PostOptimizeExplainFeedbackResponse
+func (c *ClientWithResponses) PostOptimizeExplainFeedbackWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostOptimizeExplainFeedbackResponse, error) {
+	rsp, err := c.PostOptimizeExplainFeedbackWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostOptimizeExplainFeedbackResponse(rsp)
+}
+
+func (c *ClientWithResponses) PostOptimizeExplainFeedbackWithResponse(ctx context.Context, body PostOptimizeExplainFeedbackJSONRequestBody, reqEditors ...RequestEditorFn) (*PostOptimizeExplainFeedbackResponse, error) {
+	rsp, err := c.PostOptimizeExplainFeedback(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostOptimizeExplainFeedbackResponse(rsp)
+}
+
 // GetOptimizeHealthWithResponse request returning *GetOptimizeHealthResponse
 func (c *ClientWithResponses) GetOptimizeHealthWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetOptimizeHealthResponse, error) {
 	rsp, err := c.GetOptimizeHealth(ctx, reqEditors...)
@@ -616,6 +924,93 @@ func ParsePostOptimizeChargeScheduleResponse(rsp *http.Response) (*PostOptimizeC
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePostOptimizeExplainResponse parses an HTTP response from a PostOptimizeExplainWithResponse call
+func ParsePostOptimizeExplainResponse(rsp *http.Response) (*PostOptimizeExplainResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PostOptimizeExplainResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ExplainResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON502 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePostOptimizeExplainFeedbackResponse parses an HTTP response from a PostOptimizeExplainFeedbackWithResponse call
+func ParsePostOptimizeExplainFeedbackResponse(rsp *http.Response) (*PostOptimizeExplainFeedbackResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PostOptimizeExplainFeedbackResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 502:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON502 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 

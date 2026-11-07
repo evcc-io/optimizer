@@ -12,14 +12,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Format
         run: uv run autopep8 --recursive --exit-code --diff . 
       - name: Lint
         run: uv run ruff check
+      # the same 2.10.10 release build the image runs, pulp 4 resolves it from PATH
+      - name: Install CBC
+        run: |
+          curl -sSL https://github.com/coin-or/Cbc/releases/download/releases%2F2.10.10/Cbc-releases.2.10.10-x86_64-ubuntu22-gcc1130-static.tar.gz \
+            | sudo tar xz -C /usr/local ./bin/cbc
+          echo | cbc | grep -q 'Version: 2.10.10'
       - name: Test
         run: uv run pytest

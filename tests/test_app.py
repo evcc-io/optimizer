@@ -1,4 +1,5 @@
 
+import dataclasses
 import json
 import pathlib
 
@@ -12,7 +13,10 @@ from optimizer.app import app, settings
 
 
 @pytest.mark.parametrize('test_case', pathlib.Path('test_cases').glob('*.json'))
-def test_optimizer(test_case: pathlib.Path):
+def test_optimizer(test_case: pathlib.Path, monkeypatch):
+    # stored objectives are proven optima. The production gap may stop a cent or two short of
+    # them, 020 lands 1.2 ct below at 2 ct, so compare at the one cent they were recorded with
+    monkeypatch.setenv("OPTIMIZER_GAP_ABS", "0.01")
     client = app.test_client()
 
     test_data = json.loads(test_case.read_text())
@@ -89,9 +93,8 @@ def test_subject_logging_is_configurable(capsys, monkeypatch):
 
 def test_unproved_solutions_report_feasible(monkeypatch):
     # A solve cut off by the clock still returns a full schedule, but it is not the proved optimum
-    # and must not claim to be. pulp sets LpStatusOptimal either way, so the distinction comes from
-    # sol_status: on one captured request a 2 s and a 30 s run both reported Optimal, with
-    # objective values of -682466848 and 59714881.
+    # and must not claim to be: on one captured request a 2 s and a 30 s run both came back with a
+    # schedule, with objective values of -682466848 and 59714881.
     #
     # The truncation is simulated rather than provoked with a small time limit, because CBC's -sec
     # is not a wall clock -- it is only tested between branch and bound nodes, so every stored case
@@ -100,9 +103,7 @@ def test_unproved_solutions_report_feasible(monkeypatch):
     original = pulp.LpProblem.solve
 
     def stopped_on_time(self, *args, **kwargs):
-        result = original(self, *args, **kwargs)
-        self.sol_status = pulp.LpSolutionIntegerFeasible
-        return result
+        return dataclasses.replace(original(self, *args, **kwargs), status=pulp.LpSolveStatus.TimeLimit)
 
     request = json.loads(pathlib.Path('test_cases/012-early-charging-not-perfect.json').read_text())["request"]
     client = app.test_client()
@@ -158,12 +159,78 @@ def test_requests_with_an_open_gap_are_dumped(tmp_path, monkeypatch):
     assert line["request"] == request
 
 
+def test_infeasible_requests_are_dumped_with_their_subject(tmp_path, monkeypatch):
+    # production sees a few installations send a contradictory model every 15 minutes; the dump
+    # names the account and the evcc release so the input can be fixed where it comes from. The
+    # known contradictions are rejected with a 400 before solving, so the status is simulated
+    original = pulp.LpProblem.solve
+
+    def infeasible(self, *args, **kwargs):
+        return dataclasses.replace(original(self, *args, **kwargs), status=pulp.LpSolveStatus.Infeasible, has_solution=False)
+
+    request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
+    dump = tmp_path / "infeasible.jsonl"
+    monkeypatch.setattr(settings, "dump_slow_requests", str(dump))
+    monkeypatch.setattr(pulp.LpProblem, "solve", infeasible)
+    monkeypatch.setenv("JWT_TOKEN_SECRET", "test-secret")
+    token = jwt.encode({"sub": "someone"}, "test-secret", algorithm="HS256")
+    client = app.test_client()
+
+    body = client.post("/optimize/charge-schedule", json=request,
+                       headers={"Authorization": f"Bearer {token}", "User-Agent": "evcc/0.317.0"}).json
+    assert body["status"] == "Infeasible"
+
+    line = json.loads(dump.read_text())
+    assert line["status"] == "Infeasible"
+    assert line["subject"] == "someone"
+    assert line["client"] == "evcc/0.317.0"
+    assert line["request"] == request
+
+
+def test_unsolved_requests_are_dumped(tmp_path, monkeypatch):
+    # a Not Solved burns the probe and cost stage caps and returns nothing, well short of the time
+    # limit; the dump is the only record of what was asked. The status is simulated rather than
+    # provoked, see test_unproved_solutions_report_feasible for why
+    original = pulp.LpProblem.solve
+
+    def stopped_without_incumbent(self, *args, **kwargs):
+        return dataclasses.replace(original(self, *args, **kwargs), status=pulp.LpSolveStatus.TimeLimit, has_solution=False)
+
+    request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
+    dump = tmp_path / "unsolved.jsonl"
+    monkeypatch.setattr(settings, "dump_slow_requests", str(dump))
+    monkeypatch.setattr(pulp.LpProblem, "solve", stopped_without_incumbent)
+    client = app.test_client()
+
+    body = client.post("/optimize/charge-schedule", json=request).json
+    assert body["status"] == "Not Solved"
+
+    line = json.loads(dump.read_text())
+    assert line["status"] == "Not Solved"
+    assert line["request"] == request
+
+
+def test_blocked_clients_are_refused_before_solving(capsys, monkeypatch):
+    request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
+    client = app.test_client()
+
+    response = client.post("/optimize/charge-schedule", json=request, headers={"User-Agent": "evcc/0.304.1"})
+    # 400 carries the message into evcc's log, which decodes the Error body for 400 and 500 only
+    assert response.status_code == 400
+    assert response.json["message"] == "evcc/0.304.1 is no longer served, please upgrade evcc"
+    assert '{"solve"' not in capsys.readouterr().out, "a refused request must not reach the solver"
+
+    monkeypatch.setattr(settings, "blocked_clients", "")
+    assert client.post("/optimize/charge-schedule", json=request, headers={"User-Agent": "evcc/0.304.1"}).status_code == 200
+
+
 def test_every_request_logs_a_solve_line(capsys):
     # the key names are the Log Analytics contract: the dashboard's KQL queries parse this line,
     # so renaming one breaks production attribution silently
     request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
     client = app.test_client()
-    client.post("/optimize/charge-schedule", json=request, headers={"User-Agent": "evcc/0.311.1"})
+    # the line is printed once the response is closed, so it can time sending it (#193)
+    client.post("/optimize/charge-schedule", json=request, headers={"User-Agent": "evcc/0.311.1"}).close()
 
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()
              if line.startswith('{"solve"')]
@@ -174,6 +241,12 @@ def test_every_request_logs_a_solve_line(capsys):
     assert solve["elapsed"] > 0
     assert solve["stages"] and set(solve["stages"]) <= {"build", "probe", "cost", "tie_break", "continuity"}
     assert solve["steps"] == len(request["time_series"]["dt"])
+    # receiving, validating, solving and responding, to tell a slow client from a slow solve (#193).
+    # Parsing the payload and building the model fall between validate and the solve, so the
+    # phases account for no more than the total, which lines up with the access log
+    phases = ("read", "validate", "elapsed", "respond")
+    assert all(solve[phase] >= 0 for phase in phases)
+    assert sum(solve[phase] for phase in phases) <= solve["total"] + 0.002
 
 
 def test_abort_returns_json_message():
@@ -196,3 +269,53 @@ def test_abort_returns_json_message():
     assert response.status_code == 400
     assert response.json is not None
     assert "message" in response.json
+
+
+def swagger_example(schema, definitions):
+    """The request body the Swagger UI on / prefills: example or default, the first enum value, a type placeholder."""
+    ref = schema.get("$ref") or schema.get("allOf", [{}])[0].get("$ref")
+    if ref:
+        return swagger_example(definitions[ref.split("/")[-1]], definitions)
+    for key in ("example", "default"):
+        if key in schema:
+            return schema[key]
+    if "enum" in schema:
+        return schema["enum"][0]
+    if schema.get("type", "object") == "object":
+        return {name: swagger_example(prop, definitions) for name, prop in schema.get("properties", {}).items()}
+    if schema["type"] == "array":
+        return [swagger_example(schema.get("items", {}), definitions)]
+    return {"string": "string", "number": 0, "integer": 0, "boolean": True}[schema["type"]]
+
+
+def test_swagger_example_is_solved():
+    # whoever tries the API on / sends this first. It came back as a 500 for its zero length
+    # step, then as Not Solved for its battery that can neither charge nor discharge
+    client = app.test_client()
+    definitions = client.get("/swagger.json").json["definitions"]
+    request = swagger_example({"$ref": "#/definitions/OptimizationInput"}, definitions)
+
+    response = client.post("/optimize/charge-schedule", json=request)
+
+    assert response.status_code == 200
+    assert response.json["status"] == "Optimal"
+
+
+def test_battery_without_power_is_solved():
+    # evcc sends c_max and d_max 0 for a battery whose power limits read 0. Its charge
+    # discharge gate was left in no row, came back without a value and failed the feasibility check
+    request = {
+        "batteries": [
+            {"s_min": 0, "s_max": 10000, "s_initial": 5000, "c_min": 0, "c_max": 0, "d_max": 0, "p_a": 0.0001},
+            {"s_min": 0, "s_max": 50000, "s_initial": 0, "c_min": 0, "c_max": 11000, "d_max": 0, "p_a": 0.0003},
+        ],
+        "time_series": {
+            "dt": [3600, 3600], "gt": [1000, 1000], "ft": [0, 2000],
+            "p_N": [0.0003, 0.0003], "p_E": [0.0001, 0.0001],
+        },
+    }
+
+    response = app.test_client().post("/optimize/charge-schedule", json=request)
+
+    assert response.json["status"] == "Optimal"
+    assert response.json["batteries"][0]["state_of_charge"] == [5000, 5000]

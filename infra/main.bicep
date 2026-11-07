@@ -28,6 +28,38 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
   }
 }
 
+// explanations and the votes on them, read by the prompt tuning skill. Table storage: one
+// entity per explanation, a few thousand a month, no server to run.
+resource feedbackStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: 'stoptimizerfeedback'
+  location: location
+  kind: 'StorageV2'
+  sku: {
+    name: 'Standard_LRS'
+  }
+  properties: {
+    minimumTlsVersion: 'TLS1_2'
+    allowBlobPublicAccess: false
+    supportsHttpsTrafficOnly: true
+  }
+}
+
+resource feedbackTables 'Microsoft.Storage/storageAccounts/tableServices@2023-05-01' = {
+  parent: feedbackStorage
+  name: 'default'
+}
+
+resource feedbackTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' = {
+  parent: feedbackTables
+  name: 'explanations'
+}
+
+// The container app writes with its managed identity. Its Storage Table Data Contributor role on
+// this account is assigned by hand: the deploy principal is Contributor and may not write role
+// assignments. Once, after the first deploy that creates the account:
+//   az role assignment create --role "Storage Table Data Contributor" --scope <feedbackStorage.id> \
+//     --assignee-object-id <containerApp.identity.principalId> --assignee-principal-type ServicePrincipal
+
 @description('Custom hostname served by the container app')
 param customHostname string = 'optimizer.evcc.io'
 
@@ -74,6 +106,11 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
           keyVaultUrl: '${keyVault.properties.vaultUri}secrets/jwt-token-secret'
           identity: 'system'
         }
+        {
+          name: 'azure-openai-key'
+          keyVaultUrl: '${keyVault.properties.vaultUri}secrets/azure-openai-key'
+          identity: 'system'
+        }
       ]
     }
     template: {
@@ -94,6 +131,11 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
             // one vCPU replica at the price of a worse schedule for a small share of them.
             { name: 'OPTIMIZER_TIME_LIMIT', value: '10' }
             { name: 'OPTIMIZER_NUM_THREADS', value: '1' }
+            // CBC for the joint probe, HiGHS for the split stages (#199). Pure HiGHS proved 15 % of
+            // the mid-size requests 2.5-5x slower, overran the probe and lifted p99 from 6.4 to 8.5 s
+            // in production; the hybrid keeps CBC's probe times and HiGHS's split stages, which cut
+            // the requests returned without a schedule from 1.3 % to 0.1 %.
+            { name: 'OPTIMIZER_SOLVER', value: 'hybrid' }
             // the dump threshold is the time limit, so this collects everything above 10 s now.
             // The file is ephemeral, a replica restart takes it with it.
             { name: 'OPTIMIZER_DUMP_SLOW_REQUESTS', value: '/tmp/slow-requests.jsonl' }
@@ -114,6 +156,11 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
               value: '--workers 1 --timeout 60 --max-requests 100 --max-requests-jitter 50 --config python:optimizer.gunicorn_conf --access-logfile - --access-logformat \'%(m)s %(U)s %(s)s %(D)s\''
             }
             { name: 'JWT_TOKEN_SECRET', secretRef: 'jwt-token-secret' }
+            // plan explanations, /optimize/explain
+            { name: 'OPTIMIZER_AZURE_OPENAI_ENDPOINT', value: 'https://evcc-ai-resource.cognitiveservices.azure.com/' }
+            { name: 'OPTIMIZER_AZURE_OPENAI_KEY', secretRef: 'azure-openai-key' }
+            // explanations and votes, /optimize/explain/feedback, written with the managed identity
+            { name: 'OPTIMIZER_FEEDBACK_TABLE_ENDPOINT', value: feedbackStorage.properties.primaryEndpoints.table }
           ]
           probes: [
             {

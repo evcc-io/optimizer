@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Verify image provides linux/amd64
         run: |
@@ -38,12 +38,12 @@ jobs:
               ;;
           esac
 
-      - uses: azure/login@v2
+      - uses: azure/login@v3
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Deploy infrastructure
-        uses: azure/cli@v2
+        uses: azure/cli@v3
         with:
           inlineScript: |
             az deployment group create \

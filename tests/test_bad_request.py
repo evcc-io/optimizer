@@ -110,12 +110,61 @@ def test_empty_time_series_is_rejected(payload):
     assert response.json['message'] == 'Time series must not be empty'
 
 
+@pytest.mark.parametrize('dt', [0, -900])
+def test_non_positive_step_names_the_field(payload, dt):
+    # a zero length step was a 500, division by zero converting the demand rate to energy
+    payload['time_series']['dt'][1] = dt
+
+    response = app.test_client().post('/optimize/charge-schedule', json=payload)
+
+    assert response.status_code == 400
+    assert list(response.json['details']) == ['time_series.dt.1']
+
+
 def test_client_version_is_logged(payload, capsys):
     payload['time_series']['p_N'] = [0.0003]
 
     app.test_client().post('/optimize/charge-schedule', json=payload, headers={'User-Agent': 'evcc/0.308.1'})
 
     assert json.loads(capsys.readouterr().out)['bad_request']['client'] == 'evcc/0.308.1'
+
+
+@pytest.mark.parametrize('field', ['c_min', 'c_max', 'd_max', 's_min', 's_max', 's_initial', 's_capacity'])
+def test_negative_limit_names_the_field(payload, field, capsys):
+    # a negative d_max gave the discharge variable an empty domain and the request came back
+    # as a bare Infeasible, see evcc-io/optimizer#209
+    payload['batteries'][0][field] = -1700
+
+    response = app.test_client().post('/optimize/charge-schedule', json=payload)
+
+    assert response.status_code == 400
+    assert list(response.json['details']) == [f'batteries.0.{field}']
+    assert json.loads(capsys.readouterr().out)['bad_request']['validator'] == 'minimum'
+
+
+def test_c_min_above_c_max_is_rejected(payload):
+    payload['batteries'][0]['c_min'] = 6000
+
+    response = app.test_client().post('/optimize/charge-schedule', json=payload)
+
+    assert response.status_code == 400
+    assert response.json == {
+        'message': 'Minimum charge power must not exceed maximum charge power',
+        'details': {'batteries.0.c_min': '6000 exceeds c_max 5000'},
+    }
+
+
+def test_s_initial_above_capacity_is_rejected(payload):
+    # s is bounded by s_capacity, so a start above it has no feasible state
+    payload['batteries'][0]['s_initial'] = 12000
+
+    response = app.test_client().post('/optimize/charge-schedule', json=payload)
+
+    assert response.status_code == 400
+    assert response.json == {
+        'message': 'Initial state of charge must not exceed capacity',
+        'details': {'batteries.0.s_initial': '12000 exceeds s_capacity 10000'},
+    }
 
 
 def test_conversion_error_logs_omit_exception_values(payload, monkeypatch, capsys):

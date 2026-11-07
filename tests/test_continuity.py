@@ -1,3 +1,4 @@
+import dataclasses
 import time
 from tempfile import TemporaryDirectory
 from typing import Literal, assert_never
@@ -6,7 +7,17 @@ import numpy as np
 import pulp
 import pytest
 
-from optimizer.optimizer import CONTINUITY_SPLIT_TIME_LIMIT, CONTINUITY_TIME_LIMIT, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
+from optimizer.optimizer import (
+    CONTINUITY_SPLIT_TIME_SHARE,
+    CONTINUITY_TIME_SHARE,
+    REFERENCE_TIME_LIMIT,
+    BatteryConfig,
+    GridConfig,
+    OptimizationStrategy,
+    Optimizer,
+    TimeSeriesData,
+)
+from optimizer.settings import OptimizerSettings
 
 
 def build(strategy: str = 'none') -> Optimizer:
@@ -32,11 +43,15 @@ def seed_fragmented(model: Optimizer, monkeypatch: pytest.MonkeyPatch, schedule:
     original = model._probe_then_split
 
     def seeded(tmpdir: str, deadline: float | None) -> None:
-        for t, energy in enumerate(schedule):
-            model.problem += model.variables['c'][0][t] == energy, f'seed_{t}'
+        # a row cannot leave the model again, bounds can: pin the charge to the schedule for the
+        # solve that produces the incumbent and free it before the continuity stage runs
+        charge = model.variables['c'][0]
+        bounds = [(var.lowBound, var.upBound) for var in charge]
+        for var, energy in zip(charge, schedule):
+            var.lowBound = var.upBound = energy
         original(tmpdir, deadline)
-        for t in model.time_steps:
-            del model.problem.constraints[f'seed_{t}']
+        for var, (low, up) in zip(charge, bounds):
+            var.lowBound, var.upBound = low, up
 
     monkeypatch.setattr(model, '_probe_then_split', seeded)
 
@@ -60,11 +75,11 @@ def test_equal_prices_prefer_one_session(monkeypatch: pytest.MonkeyPatch, probe_
 @pytest.mark.parametrize('stage_seconds, expected_starts, expected_stage', [
     # the candidate cannot beat the clock of the solve that produced the incumbent, so a solve
     # that already took longer than the stage may spend gets no candidate at all
-    ({'probe': CONTINUITY_TIME_LIMIT + 1}, 3, 'skipped'),
+    ({'probe': CONTINUITY_TIME_SHARE * REFERENCE_TIME_LIMIT + 1}, 3, 'skipped'),
     # on the split path the probe spent its clock on the joint objective and failed, so it says
     # nothing about the candidate; the cost stage it extends does. Counting the probe skipped the
     # stage on every split request, the probe alone being PROBE_SHARE of the time limit (#170)
-    ({'probe': CONTINUITY_TIME_LIMIT + 1, 'cost': 0.1}, 1, 'improved 3 to 1'),
+    ({'probe': CONTINUITY_TIME_SHARE * REFERENCE_TIME_LIMIT + 1, 'cost': 0.1}, 1, 'improved 3 to 1'),
 ])
 def test_continuity_is_gated_by_the_clock_of_the_stage_it_extends(
         monkeypatch: pytest.MonkeyPatch, stage_seconds: dict[str, float], expected_starts: int, expected_stage: str):
@@ -85,16 +100,26 @@ def test_continuity_is_gated_by_the_clock_of_the_stage_it_extends(
     assert ('continuity' in model.stage_seconds) == expected_stage.startswith('improved')
 
 
-@pytest.mark.parametrize('path, cap', [('joint', CONTINUITY_TIME_LIMIT), ('split', CONTINUITY_SPLIT_TIME_LIMIT)])
-def test_split_gets_the_longer_continuity_clock(path: str, cap: float):
+@pytest.mark.parametrize('path, share', [('joint', CONTINUITY_TIME_SHARE), ('split', CONTINUITY_SPLIT_TIME_SHARE)])
+def test_split_gets_the_longer_continuity_clock(path: str, share: float):
     # the joint path is most of the traffic, the split has paid for a probe that proved nothing
     # and has clock left; both stay inside the deadline
     model = build()
     model.solve_path = path
     model.stage_seconds = {'probe': 0.5, 'cost': 0.5}
 
-    assert model._continuity_clock(None) == cap
+    assert model._continuity_clock(None) == share * REFERENCE_TIME_LIMIT
     assert model._continuity_clock(time.monotonic() + 0.5) == pytest.approx(0.5, abs=0.05)
+
+
+def test_continuity_clock_scales_with_the_time_limit():
+    # a slower host raises the time limit, the gate and the cap follow it
+    model = build()
+    model.settings = OptimizerSettings(time_limit=4 * REFERENCE_TIME_LIMIT)
+    model.solve_path = 'joint'
+    model.stage_seconds = {'probe': 2 * CONTINUITY_TIME_SHARE * REFERENCE_TIME_LIMIT}
+
+    assert model._continuity_clock(None) == pytest.approx(4 * CONTINUITY_TIME_SHARE * REFERENCE_TIME_LIMIT)
 
 
 @pytest.mark.parametrize('schedule', [(0, 500, 0, 500, 0, 500), (0, 500, 500, 500, 0, 0)])
@@ -162,13 +187,13 @@ def test_repeated_solve_does_not_keep_polishing_constraints(monkeypatch: pytest.
     model = build()
     seed_fragmented(model, monkeypatch)
     model.solve()
-    constraints = set(model.problem.constraints)
+    constraints = {c.name for c in model.problem.constraints()}
     variables = {v.name for v in model.problem.variables()}
 
     result = model.solve()
 
     assert starts(result['batteries'][0]['charging_power']) == 1
-    assert set(model.problem.constraints) == constraints
+    assert {c.name for c in model.problem.constraints()} == constraints
     assert {v.name for v in model.problem.variables()} == variables
 
 
@@ -254,7 +279,7 @@ def test_expired_deadline_keeps_incumbent(monkeypatch: pytest.MonkeyPatch):
 def test_failed_polish_restores_incumbent(monkeypatch: pytest.MonkeyPatch, outcome: Literal['infeasible', 'fractional', 'error', 'invalid']):
     model = fragmented_model(monkeypatch)
     solution = {var: var.varValue for var in model.problem.variables()}
-    status = model.problem.status, model.problem.sol_status
+    stats = model.stats
 
     def failed_solve(candidate: pulp.LpProblem, *args, **kwargs):
         for var in candidate.variables():
@@ -263,36 +288,37 @@ def test_failed_polish_restores_incumbent(monkeypatch: pytest.MonkeyPatch, outco
             case 'error':
                 raise pulp.PulpSolverError('CBC unavailable')
             case 'infeasible':
-                candidate.sol_status = pulp.LpSolutionInfeasible
+                return pulp.LpSolveStats(status=pulp.LpSolveStatus.Infeasible, has_solution=False)
             case 'fractional':
-                candidate.sol_status = pulp.LpSolutionNoSolutionFound
+                return pulp.LpSolveStats(status=pulp.LpSolveStatus.TimeLimit, has_solution=True)
             case 'invalid':
-                candidate.sol_status = pulp.LpSolutionOptimal
+                return pulp.LpSolveStats(status=pulp.LpSolveStatus.Optimal, has_solution=True)
             case _:
                 assert_never(outcome)
-        return pulp.LpStatusNotSolved
 
     monkeypatch.setattr(pulp.LpProblem, 'solve', failed_solve)
     with TemporaryDirectory() as tmpdir:
         model._solve_continuity(tmpdir, None)
 
     assert {var: var.varValue for var in model.problem.variables()} == solution
-    assert (model.problem.status, model.problem.sol_status) == status
+    assert model.stats == stats
 
 
 def test_polish_does_not_upgrade_feasible_status(monkeypatch: pytest.MonkeyPatch):
     model = fragmented_model(monkeypatch)
-    model.problem.sol_status = pulp.LpSolutionIntegerFeasible
+    model.stats = dataclasses.replace(model.stats, status=pulp.LpSolveStatus.TimeLimit)
 
     with TemporaryDirectory() as tmpdir:
         model._solve_continuity(tmpdir, None)
 
     assert starts([pulp.value(v) for v in model.variables['c'][0]]) == 1
-    assert model.problem.sol_status == pulp.LpSolutionIntegerFeasible
+    assert model.stats.status == pulp.LpSolveStatus.TimeLimit
 
 
-@pytest.mark.parametrize('value', [None, float('nan'), float('inf')])
-def test_incomplete_incumbent_skips_polishing(monkeypatch: pytest.MonkeyPatch, value: float | None):
+# a value, once set, cannot be unset on a pulp 4 variable; a variable without one is what the
+# solver leaves behind for a column no row uses, see _complete_solution
+@pytest.mark.parametrize('value', [float('nan'), float('inf')])
+def test_incomplete_incumbent_skips_polishing(monkeypatch: pytest.MonkeyPatch, value: float):
     model = fragmented_model(monkeypatch)
     model.variables['c'][0][1].varValue = value
 
@@ -303,7 +329,7 @@ def test_incomplete_incumbent_skips_polishing(monkeypatch: pytest.MonkeyPatch, v
     with TemporaryDirectory() as tmpdir:
         model._solve_continuity(tmpdir, None)
 
-    assert model.variables['c'][0][1].varValue is value
+    assert str(model.variables['c'][0][1].varValue) == str(value)
 
 
 @pytest.mark.parametrize('bound', ['cost', 'preference', 'peak'])
@@ -323,18 +349,19 @@ def test_invalid_solver_result_cannot_bypass_bounds(monkeypatch: pytest.MonkeyPa
     solution = {var: var.varValue for var in model.problem.variables()}
 
     def forged_result(candidate: pulp.LpProblem, *args, **kwargs):
+        # the candidate is a copy, so the forged schedule is written to its own variables by name
+        mirror = candidate.variablesDict()
         for var in candidate.variables():
             var.varValue = 0
         energy = [0, 500, 500, 500, 0, 0]
         for t, charge in enumerate(energy):
-            model.variables['c'][0][t].varValue = charge
-            model.variables['s'][0][t].varValue = sum(energy[:t + 1])
-            model.variables['n'][t].varValue = charge + model.time_series.gt[t]
-            model.variables['z_c'][0][t].varValue = int(charge > 0)
-        candidate.variablesDict()['charge_start_0_1'].varValue = 1
-        model.variables['p_imp_peak'].varValue = max(pulp.value(v) for v in model.variables['n']) * 4
-        candidate.sol_status = pulp.LpSolutionOptimal
-        return pulp.LpStatusOptimal
+            mirror[model.variables['c'][0][t].name].varValue = charge
+            mirror[model.variables['s'][0][t].name].varValue = sum(energy[:t + 1])
+            mirror[model.variables['n'][t].name].varValue = charge + model.time_series.gt[t]
+            mirror[model.variables['z_c'][0][t].name].varValue = int(charge > 0)
+        mirror['charge_start_0_1'].varValue = 1
+        mirror[model.variables['p_imp_peak'].name].varValue = max(charge + gt for charge, gt in zip(energy, model.time_series.gt)) * 4
+        return pulp.LpSolveStats(status=pulp.LpSolveStatus.Optimal, has_solution=True)
 
     monkeypatch.setattr(pulp.LpProblem, 'solve', forged_result)
     with TemporaryDirectory() as tmpdir:

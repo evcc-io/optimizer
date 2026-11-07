@@ -1,6 +1,8 @@
 # Install uv
-FROM python:3.13-slim AS builder
+FROM python:3.14-slim AS builder
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# the runtime stage copies only the venv: fail here if the image python does not satisfy requires-python
+ENV UV_PYTHON_DOWNLOADS=never
 
 # Change the working directory to the `app` directory
 WORKDIR /app
@@ -22,7 +24,7 @@ ADD --checksum=sha256:f551e7b843e25becee466a447118f6f44f219c4e46cfb4670829ecd3cf
     https://github.com/coin-or/Cbc/releases/download/releases%2F2.10.10/Cbc-releases.2.10.10-x86_64-ubuntu22-gcc1130-static.tar.gz \
     /tmp/cbc.tar.gz
 
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 # Create non-root user
 RUN groupadd -r app && useradd -r -g app -s /bin/false app
@@ -32,15 +34,18 @@ COPY --from=builder --chown=app:app /app/.venv /app/.venv
 
 ARG TARGETARCH
 
-# pulp bundles CBC 2.10.10 for arm64 but 2.10.3 from 2019 for amd64, and resolves the solver by a
-# fixed path with no override, so the bundled amd64 binary is linked to the fetched 2.10.10 build.
+# pulp 4 no longer bundles a solver and resolves `cbc` from PATH. The cbcbox wheel of the
+# pulp[cbc] extra is not used: it ships a CBC devel build that solves the captured requests
+# 1.5 to 3 times slower than the 2.10 releases. amd64 gets the 2.10.10 release build that has
+# been serving production, arm64 the Debian 2.10 package.
 RUN --mount=from=builder,source=/tmp/cbc.tar.gz,target=/tmp/cbc.tar.gz set -eu; \
     if [ "$TARGETARCH" = "amd64" ]; then \
         tar -xzf /tmp/cbc.tar.gz -C /usr/local ./bin/cbc; \
-        find /app/.venv -path '*/pulp/solverdir/cbc/*/cbc' -exec ln -sf /usr/local/bin/cbc {} \; ; \
+    else \
+        apt-get update -qq && apt-get install -y -qq --no-install-recommends coinor-cbc \
+            && rm -rf /var/lib/apt/lists/*; \
     fi; \
-    echo | "$(/app/.venv/bin/python -c 'from pulp.apis.coin_api import pulp_cbc_path; print(pulp_cbc_path)')" \
-        | grep -q 'Version: 2.10.10'
+    echo | "$(/app/.venv/bin/python -c 'import pulp; print(pulp.COIN_CMD().path)')" | grep -q 'Version: 2.10'
 
 # Run the application
 ENV PYTHONUNBUFFERED=1

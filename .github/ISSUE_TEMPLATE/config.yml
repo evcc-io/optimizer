@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Problem with evcc
+    url: https://github.com/evcc-io/evcc/issues
+    about: Wrong or missing data in the request, how evcc applies the plan, UI, configuration and devices.
+  - name: Need help?
+    url: https://github.com/evcc-io/evcc/discussions/categories/need-help
+    about: Questions about the optimizer in evcc and help with your setup.
