@@ -796,10 +796,14 @@ class Optimizer:
 
             # Constraint (7): Minimum charge power limits if there is no charge demand
             elif bat.c_min > 0:
+                # without discharge the room only shrinks, so a rest below c_min fills in one slot.
+                # The charger stops once the battery is full, that slot may charge less than c_min.
+                can_discharge = bat.d_max > 0
+                rest_to_fill = float('inf') if can_discharge else max(bat.s_max - bat.s_initial, 0.) / self.eta_c
                 for t in self.time_steps:
                     # Lower bound: either 0 or at least c_min
-                    self.problem += (self.variables['c'][i][t] >= bat.c_min * self.time_series.dt[t] / 3600.
-                                     * self.variables['z_c'][i][t])
+                    c_lower = min(bat.c_min * self.time_series.dt[t] / 3600., rest_to_fill)
+                    self.problem += (self.variables['c'][i][t] >= c_lower * self.variables['z_c'][i][t])
                     self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
                                      * self.variables['z_c'][i][t])
 
