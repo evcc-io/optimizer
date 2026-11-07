@@ -855,7 +855,12 @@ class Optimizer:
 
         # pulp resolves the binary unless one is configured: a cbc on PATH, the 2.10 release build
         # the image installs. The cbcbox wheel of the pulp cbc extra is deliberately not used, its
-        # devel build solves the captured requests 1.5 to 3 times slower
+        # devel build solves the captured requests 1.5 to 3 times slower.
+        # No MIP start for CBC. 2.10.3 mishandled one on this model: it returned a strictly worse
+        # schedule reported as proven optimal, and declared the model infeasible over a cost bound
+        # the start satisfies. 2.10.13 comes back identical to the cold run, but the image ships
+        # 2.10.10 and that one has not been checked, so the start stays with HiGHS until it is.
+        options.pop('warmStart', None)
         solver = pulp.COIN_CMD(path=self.settings.cbc_path, msg=0, threads=self.settings.num_threads, **options)
         solver.tmpDir = tmpdir
         return solver
@@ -1045,16 +1050,12 @@ class Optimizer:
         else:
             if remaining is not None:
                 remaining = min(remaining, self._clock(MILP_PREFERENCE_TIME_SHARE))
-            # no warm start, although a feasible solution is right there in the variables. CBC
-            # 2.10.3, which pulp 3 bundled, mishandled a MIP start on this model: it returned a
-            # strictly worse schedule and reported it as proven optimal, and it declared the model
-            # infeasible over a cost bound the start itself satisfies. Measured on one captured
-            # request, preference -0.806 warm against -0.610 cold, the cold value matching a single
-            # joint solve to the last digit. Fixed upstream, the same LP and the same start file
-            # come back identical to the cold run on CBC 2.10.13, but the image ships 2.10.10 and
-            # that one has not been checked, so this stays until it is.
+            # the best schedule so far is a feasible start for the MILP. HiGHS takes it as a MIP
+            # start, CBC does not, see _solver
+            for var, value in best.items():
+                var.varValue = value
             with self._timed('tie_break'):
-                stats = self._solve(self._solver(tmpdir, timeLimit=remaining))
+                stats = self._solve(self._solver(tmpdir, timeLimit=remaining, warmStart=True))
             stages.append('MILP ' + stats.status_str + ('' if keep(stats) else ' unused'))
 
         self.preference_stage = ', '.join(stages)
@@ -1112,8 +1113,12 @@ class Optimizer:
                 if remaining <= 0:
                     self.continuity_stage = 'no time'
                     return
+            # the schedule in the variables is a feasible start; a start variable at 1 holds its row
+            by_name = {var.name: value for var, value in solution.items()}
+            for var in candidate.variables():
+                var.varValue = by_name.get(var.name, 1.)
             with self._timed('continuity'), self._hard_limit(remaining + CUTOFF_MARGIN):
-                stats = candidate.solve(self._solver(tmpdir, timeLimit=remaining))
+                stats = candidate.solve(self._solver(tmpdir, timeLimit=remaining, warmStart=True))
             self.continuity_stage = 'MILP ' + stats.status_str + ' unused'
             if not stats.has_solution or not _complete_solution(candidate):
                 return
@@ -1273,9 +1278,10 @@ class Optimizer:
         reserve = (0. if self.settings.time_limit is None
                    else self.settings.time_limit * PREFERENCE_TIME_SHARE)
         remaining = None if deadline is None else max(min(self._clock(COST_TIME_SHARE), deadline - reserve - time.monotonic()), 0.1)
+        # the probe's schedule is the first incumbent, a bound under the search from the start
         with self._timed('cost'):
             self.stats = self._solve(self._solver(tmpdir, timeLimit=remaining, gapAbs=scaled_gap,
-                                                  logPath=os.path.join(tmpdir, 'cost.log')))
+                                                  logPath=os.path.join(tmpdir, 'cost.log'), warmStart=fallback is not None))
         self.cost_stage_gap = self._stage_gap(self.stats, scale)
 
         if self.stats.has_solution and self._is_feasible():
