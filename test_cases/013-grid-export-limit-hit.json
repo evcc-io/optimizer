@@ -27,7 +27,8 @@
             "p_max_exp": 15000
         },
         "strategy": {
-            "charging_strategy": "charge_before_export"
+            "charging_strategy": "none",
+            "charge_early": true
         },
         "time_series": {
             "dt": [
