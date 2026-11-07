@@ -484,15 +484,6 @@ class Optimizer:
                 for t in self.time_steps
             ] if bat.c_max > 0 or bat.d_max > 0 else [0] * self.T
 
-        # binary variable to capture when a battery without charge demand reaches s_max. Declared last, CBC's
-        # search depends on the column order and some stored cases only prove in time with this one
-        for i, bat in enumerate(self.batteries):
-            if bat.p_demand is None and bat.c_min > 0:
-                self.variables['z_s_max_reached'][i] = [
-                    self.problem.add_variable(f"z_s_max_reached_{i}_{t}", cat='Binary')
-                    for t in self.time_steps
-                ]
-
     def _setup_target_function(self):
         """
         Gather all target function contributions and instantiate the objective
@@ -805,16 +796,14 @@ class Optimizer:
 
             # Constraint (7): Minimum charge power limits if there is no charge demand
             elif bat.c_min > 0:
+                # without discharge the room only shrinks, so a rest below c_min fills in one slot.
+                # The charger stops once the battery is full, that slot may charge less than c_min.
+                can_grow_room = bat.d_max > 0
+                rest_to_fill = float('inf') if can_grow_room else max(bat.s_max - bat.s_initial, 0.) / self.eta_c
                 for t in self.time_steps:
-                    # introduce z_s_max_reached to become only 1 if s_max is reached at the end of the slot. The
-                    # charger stops once the battery is full, so that slot may charge less than c_min
-                    z_s_max_reached = self.variables['z_s_max_reached'][i][t]
-                    # s is bounded below by 0, so s_max is the largest the left side can get
-                    self.problem += (bat.s_max - self.variables['s'][i][t] <= bat.s_max * (1 - z_s_max_reached))
-
-                    # Lower bound: either 0 or at least c_min, unless the slot fills the battery
-                    self.problem += (self.variables['c'][i][t] >= bat.c_min * self.time_series.dt[t] / 3600.
-                                     * (self.variables['z_c'][i][t] - z_s_max_reached))
+                    # Lower bound: either 0 or at least c_min
+                    c_lower = min(bat.c_min * self.time_series.dt[t] / 3600., rest_to_fill)
+                    self.problem += (self.variables['c'][i][t] >= c_lower * self.variables['z_c'][i][t])
                     self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
                                      * self.variables['z_c'][i][t])
 
