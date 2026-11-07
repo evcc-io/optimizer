@@ -210,6 +210,27 @@ def test_unsolved_requests_are_dumped(tmp_path, monkeypatch):
     assert line["request"] == request
 
 
+def test_failed_requests_are_dumped(tmp_path, monkeypatch):
+    # a solve that raises fails the same way on every retry of the same input, and the 500 carries
+    # only the message: the dump is the only record of what was asked
+    def fails(self, *args, **kwargs):
+        raise RuntimeError("solver failed")
+
+    request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
+    dump = tmp_path / "failed.jsonl"
+    monkeypatch.setattr(settings, "dump_slow_requests", str(dump))
+    monkeypatch.setattr(pulp.LpProblem, "solve", fails)
+    client = app.test_client()
+
+    response = client.post("/optimize/charge-schedule", json=request, headers={"User-Agent": "evcc/0.318.2"})
+    assert response.status_code == 500
+
+    line = json.loads(dump.read_text())
+    assert line["status"] == "RuntimeError"
+    assert line["client"] == "evcc/0.318.2"
+    assert line["request"] == request
+
+
 def test_blocked_clients_are_refused_before_solving(capsys, monkeypatch):
     request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
     client = app.test_client()
