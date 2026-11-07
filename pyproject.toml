@@ -7,7 +7,7 @@ authors = [{ name = "andig", email = "andi@evcc.io" }, { name = "ekke" }]
 requires-python = ">=3.13"
 dependencies = [
     "azure-data-tables>=12.7.0",
-    "azure-identity>=1.26.0",
+    "azure-identity>=1.27.0",
     "flask>=3.1.3",
     "flask-restx>=1.3.0",
     "gunicorn>=26.2.0",
@@ -15,9 +15,9 @@ dependencies = [
     "matplotlib",
     "numpy>=2.5.4",
     "pandas>=2.3.3",
-    "pulp>=4.0.1",
+    "pulp>=4.2.0",
     "pydantic>=2.14.1",
-    "pydantic-settings>=2.15.0",
+    "pydantic-settings>=2.16.2",
     "pyjwt>=2.15.1",
     "tabulate",
     "werkzeug>=3.1.9",
@@ -31,7 +31,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = ["autopep8>=2.3.2", "locust>=2.46.7", "pytest>=9.1.1", "ruff>=0.17.0"]
+dev = ["autopep8>=2.3.2", "locust>=2.47.0", "pytest>=9.2.0", "ruff>=0.17.3"]
 
 [tool.autopep8]
 max_line_length = 160
