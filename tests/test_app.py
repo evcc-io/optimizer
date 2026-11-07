@@ -16,7 +16,7 @@ from optimizer.app import app, settings
 def test_optimizer(test_case: pathlib.Path, monkeypatch):
     # stored objectives are proven optima, so compare with the gap closed. Any open gap lets each
     # CBC build stop on an incumbent of its own: at one cent 020 lands 0.6 ct short on CBC 2.10.13
-    # and on the optimum with the 2.10.10 build CI pins. Closed, the suite runs no slower
+    # and on the optimum with 2.10.10. Closed, the suite runs no slower
     monkeypatch.setenv("OPTIMIZER_GAP_ABS", "0")
     client = app.test_client()
 
