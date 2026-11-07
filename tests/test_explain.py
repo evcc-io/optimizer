@@ -27,6 +27,9 @@ def test_digest_describes_batteries_and_lists_every_step(payload):
     payload['details']['batteryDetails'] = []
     assert 'home battery "home battery 1": capacity 10.0 kWh' in explain.digest(payload)
 
+    payload['details']['batteryDetails'] = [{'name': 'db:6', 'type': 'battery'}]
+    assert 'home battery "home battery with id 6": capacity' in explain.digest(payload)
+
 
 def test_digest_spells_out_goals_demands_and_limits(payload):
     payload['req']['batteries'][0].update({

@@ -183,7 +183,11 @@ def capacity_wh(bat, detail):
 
 def battery_line(bat, detail, i, labels, capacity):
     kind = 'vehicle' if detail.get('type') == 'vehicle' else 'home battery'
-    title = detail.get('title') or detail.get('name') or f'{kind} {i + 1}'
+    name = detail.get('name') or ''
+    # untitled ui-configured devices are named db:<id>
+    if name.startswith('db:'):
+        name = f'{kind} with id {name.removeprefix("db:")}'
+    title = detail.get('title') or name or f'{kind} {i + 1}'
 
     def pct(wh):
         return f'{round(wh / capacity * 100)}%'
