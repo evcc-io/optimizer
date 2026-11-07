@@ -6,18 +6,18 @@ from optimizer.optimizer import Optimizer
 from optimizer.settings import OptimizerSettings
 
 CASE = '023-c_min-limit-kept-with-p_demand-set'
+SOLVER = Optimizer._solver
 
 
 def split(monkeypatch, cold=False):
     """The split on hybrid, with the start handed on or stripped; returns the result and the (stage, start) calls."""
     starts = []
-    original = Optimizer._solver
 
     def record(self, tmpdir, **options):
         starts.append((self._stage, options.get('warmStart', False)))
         if cold:
             options.pop('warmStart', None)
-        return original(self, tmpdir, **options)
+        return SOLVER(self, tmpdir, **options)
 
     monkeypatch.setattr(Optimizer, '_solver', record)
     optimizer = build(CASE)
