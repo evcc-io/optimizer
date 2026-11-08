@@ -875,12 +875,7 @@ class Optimizer:
 
         # pulp resolves the binary unless one is configured: a cbc on PATH, the 2.10 release build
         # the image installs. The cbcbox wheel of the pulp cbc extra is deliberately not used, its
-<< << << < HEAD
-        # devel build solves the captured requests 1.5 to 3 times slower. The MIP start needs 2.10.13,
-        # the image's version: 2.10.3 returned a worse schedule as proven optimal from the same start
-== == == =
-        # devel build solves the captured requests 1.5 to 3 times slower
->>>>>> > 2619946 (perf: hand the MIP start to CBC 2.10.13 as well)
+        # devel build solves the captured requests 1.5 to 3 times slower.
         solver = pulp.COIN_CMD(path=self.settings.cbc_path, msg=0, threads=self.settings.num_threads, **options)
         solver.tmpDir = tmpdir
         if options.get('warmStart') and not cbc_takes_mip_start(solver.path):
