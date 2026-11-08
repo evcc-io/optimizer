@@ -22,7 +22,8 @@ def split(monkeypatch, solver, cold=False):
 
     monkeypatch.setattr(Optimizer, '_solver', record)
     optimizer = build(CASE)
-    optimizer.settings = OptimizerSettings(solver=solver, time_limit=10, probe_seconds=0, gap_abs=None, gap_share=0)
+    # the tie break gets a tenth of the limit; 10 s left it 1 s, which a loaded CI runner overran
+    optimizer.settings = OptimizerSettings(solver=solver, time_limit=60, probe_seconds=0, gap_abs=None, gap_share=0)
     return optimizer.solve(), starts
 
 
