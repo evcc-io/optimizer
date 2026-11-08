@@ -10,6 +10,7 @@ import pytest
 
 import optimizer.app as app_module
 from optimizer.app import app, settings
+from optimizer.optimizer import Optimizer
 
 
 @pytest.mark.parametrize('test_case', pathlib.Path('test_cases').glob('*.json'))
@@ -186,6 +187,26 @@ def test_infeasible_requests_are_dumped_with_their_subject(tmp_path, monkeypatch
     assert line["subject"] == "someone"
     assert line["client"] == "evcc/0.317.0"
     assert line["request"] == request
+
+
+def test_an_infeasible_probe_is_reported_without_the_split(monkeypatch):
+    # production: a demand forecast of 1e36 Wh in a few slots. CBC proves it infeasible in the probe,
+    # the split handed it to HiGHS, which refuses bounds past 1e20 and returned no solution at all
+    request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
+    request["time_series"]["gt"][3] = 1e36
+    stages = []
+    solve = Optimizer._solve
+
+    def record(self, solver):
+        stages.append(self._stage)
+        return solve(self, solver)
+
+    monkeypatch.setattr(settings, "solver", "hybrid")
+    monkeypatch.setattr(Optimizer, "_solve", record)
+    body = app.test_client().post("/optimize/charge-schedule", json=request).json
+
+    assert body["status"] == "Infeasible"
+    assert stages == ["probe"]
 
 
 def test_unsolved_requests_are_dumped(tmp_path, monkeypatch):
