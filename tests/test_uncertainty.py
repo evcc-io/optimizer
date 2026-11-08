@@ -35,25 +35,20 @@ def night_import(optimizer):
     return sum(pulp.value(optimizer.variables['n'][t]) for t in range(2))
 
 
-def test_without_a_budget_the_model_is_unchanged():
-    plain = build()
-    plain.create_model()
-    disabled = build(UncertaintyConfig(ft_dev=0.5, gt_dev=0.2, budget=0))
-    disabled.create_model()
-    assert len(disabled.problem.variables()) == len(plain.problem.variables())
-    assert len(disabled.problem.constraints()) == len(plain.problem.constraints())
-
-
-def test_without_a_deviation_the_model_is_unchanged():
-    # no solar to fall short and no demand deviation: nothing to hedge, so no extra rows either
-    plain = build()
-    plain.time_series.ft = [0] * 6
-    plain.create_model()
-    idle = build(UncertaintyConfig(ft_dev=0.5, gt_dev=0, budget=2))
-    idle.time_series.ft = [0] * 6
-    idle.create_model()
-    assert len(idle.problem.variables()) == len(plain.problem.variables())
-    assert len(idle.problem.constraints()) == len(plain.problem.constraints())
+@pytest.mark.parametrize('uncertainty, ft', [
+    (UncertaintyConfig(ft_dev=0.5, gt_dev=0.2, budget=0), None),
+    # no solar to fall short and no demand deviation: nothing to hedge
+    (UncertaintyConfig(ft_dev=0.5, gt_dev=0, budget=2), [0] * 6),
+])
+def test_without_anything_to_hedge_the_model_is_unchanged(uncertainty, ft):
+    models = [build(), build(uncertainty)]
+    for model in models:
+        if ft is not None:
+            model.time_series.ft = ft
+        model.create_model()
+    plain, hedged = (m.problem for m in models)
+    assert len(hedged.variables()) == len(plain.variables())
+    assert len(hedged.constraints()) == len(plain.constraints())
 
 
 def test_the_hedge_charges_from_grid_before_an_uncertain_day():
