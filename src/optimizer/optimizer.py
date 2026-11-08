@@ -514,7 +514,10 @@ class Optimizer:
                                           for t in range(c + 1)] for c in self._checkpoints()}
             # extra grid import covering the deviation, and its running sum, Wh
             self.variables['u_imp'] = [self.problem.add_variable(f"u_imp_{t}", lowBound=0) for t in self.time_steps]
-            self.variables['u_imp_sum'] = [self.problem.add_variable(f"u_imp_sum_{t}", lowBound=0) for t in self.time_steps]
+            # ... and the most of the deviation the battery reserve covers at any step, Wh
+            self.variables['u_imp_sum'], self.variables['u_res'] = (
+                [self.problem.add_variable(f"u_imp_sum_{t}", lowBound=0) for t in self.time_steps],
+                self.problem.add_variable("u_res", lowBound=0))
             # export the deviation takes away, Wh, and the dual of its worst case over the budget
             self.variables['u_lost'] = [self.problem.add_variable(f"u_lost_{t}", lowBound=0) if self._deviation(t) > 0 else 0
                                         for t in self.time_steps]
@@ -599,13 +602,15 @@ class Optimizer:
                 # decrease penalty slightly over time to push limit exceeding to late times
                 objective += - self.prc_e_grid_exp_pen * (1.0 - t * 1e-5) * self.variables['e_exp_lim_exc'][t]
 
-        # cost of the budgeted forecast error: the extra import it forces, at the import price of
-        # the step it is drawn in, and the export it takes away. A negative price would reward
-        # drawing more, so it is floored at zero. The export loss is dualised in units of
+        # cost of the budgeted forecast error, see _add_uncertainty_constraints: the extra import it
+        # forces at the import price of the step it is drawn in, the reserve it consumes at the export
+        # price that energy would have earned, and the export it takes away. A negative price would
+        # reward drawing more, so it is floored at zero. The export loss is dualised in units of
         # penalty_base so its coefficients stay at the price magnitude the scaling anchors on.
         if self.uncertainty.active():
             for t in self.time_steps:
                 objective -= self.variables['u_imp'][t] * max(self.time_series.p_N[t], 0)
+            objective -= self.variables['u_res'] * max(np.max(self.time_series.p_E), 0)
             objective -= self.penalty_base * (min(self.uncertainty.budget, self.T) * self.variables['u_lost_lambda']
                                               + pulp.lpSum(self.variables['u_lost_mu']))
 
@@ -888,14 +893,20 @@ class Optimizer:
         Every step may deliver ft_dev less solar and gt_dev more demand than forecast, but no more
         than `budget` steps do so at once. The schedule stays as planned, the deviation is absorbed
         in this order: export the step had planned, the energy the batteries hold above s_min, and
-        extra grid import at that step's price. The worst case over which steps deviate is the sum
-        of the largest net deviations within the budget, which the dual pair lambda and mu evaluates
-        exactly at each checkpoint. Between checkpoints the last evaluated value stands, so a
-        deviation is recognised up to one spacing late.
+        extra grid import. The worst case over which steps deviate is the sum of the largest net
+        deviations within the budget, which the dual pair lambda and mu evaluates exactly at each
+        checkpoint. Between checkpoints the last evaluated value stands, so a deviation is
+        recognised up to one spacing late.
 
         Extra import is bounded by what the schedule discharges at that step plus what the
         checkpoint just recognised: it replaces a discharge the shortfall has made impossible, or
         covers the shortfall as it arrives, and cannot be booked ahead at a cheaper price.
+
+        The reserve is measured in load Wh, stored Wh less the discharge efficiency, and consuming
+        it is priced at the export price: the least that energy would have earned the plan. Free,
+        the hedge would buy a reserve from the grid on a flat tariff, where a shortfall costs the
+        same whenever it is imported, for the export credit the plan books on the solar the reserve
+        displaces, which the worst case never earns.
 
         The export a deviation takes away is lost revenue, priced the same way over the budget.
         Without it, exporting instead of storing would hedge for free and win the tie against
@@ -946,10 +957,12 @@ class Optimizer:
 
             if last is None:
                 continue
-            reserve = pulp.lpSum(self.variables['s'][i][t] - self.batteries[i].s_min + self.variables['s_min_pen'][i][t]
-                                 for i in reserve_batteries)
+            # stored Wh reach the load at the discharge efficiency
+            reserve = self.eta_d * pulp.lpSum(self.variables['s'][i][t] - self.batteries[i].s_min
+                                              + self.variables['s_min_pen'][i][t] for i in reserve_batteries)
             self.problem += running >= recognised - reserve
             self.problem += running <= recognised
+            self.problem += self.variables['u_res'] >= recognised - running
 
     def _stage_solver(self) -> str:
         """The solver of the stage being timed: hybrid proves the joint probe on CBC and runs the rest on HiGHS.

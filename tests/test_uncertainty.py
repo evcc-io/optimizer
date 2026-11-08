@@ -90,6 +90,16 @@ def test_export_absorbs_the_deviation():
     assert sum(pulp.value(v) for v in hedged.variables['u_imp']) == pytest.approx(0, abs=1)
 
 
+def test_a_flat_tariff_does_not_charge_a_reserve_from_the_grid():
+    # a shortfall costs the same whenever it is imported, so a reserve bought from the grid, which
+    # only displaces solar into export, cannot beat importing the shortfall when it happens
+    hedged = build(UncertaintyConfig(ft_dev=0.3, gt_dev=0.2, budget=2))
+    hedged.time_series.p_N = [3e-4] * 6
+    assert hedged.solve()['status'] == 'Optimal'
+    for t in range(6):
+        assert pulp.value(hedged.variables['n'][t]) <= hedged.time_series.gt[t] + 1
+
+
 @pytest.mark.parametrize('uncertainty', [{'ft_dev': 1.5}, {'gt_dev': -0.1}, {'budget': -1}])
 def test_bad_uncertainty_is_rejected(uncertainty):
     request = json.loads(pathlib.Path('test_cases/012-early-charging-not-perfect.json').read_text())['request']
