@@ -1,4 +1,4 @@
-"""The MIP start handover: every HiGHS stage after the probe starts from the schedule the stage before it reached."""
+"""The MIP start handover: every stage after the probe starts from the schedule the stage before it reached."""
 import pytest
 from test_objective_split import build
 
