@@ -20,8 +20,8 @@ ADD . /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-editable --no-group dev
 
-ADD --checksum=sha256:f551e7b843e25becee466a447118f6f44f219c4e46cfb4670829ecd3cf47e7d8 \
-    https://github.com/coin-or/Cbc/releases/download/releases%2F2.10.10/Cbc-releases.2.10.10-x86_64-ubuntu22-gcc1130-static.tar.gz \
+ADD --checksum=sha256:86d52bb5634203826f213a09cba83394623a1c44eecc75caed2a553a9ac642fa \
+    https://github.com/coin-or/Cbc/releases/download/releases%2F2.10.13/Cbc-releases.2.10.13-x86_64-ubuntu22-gcc1140-static.tar.gz \
     /tmp/cbc.tar.gz
 
 FROM python:3.14-slim
@@ -36,7 +36,7 @@ ARG TARGETARCH
 
 # pulp 4 no longer bundles a solver and resolves `cbc` from PATH. The cbcbox wheel of the
 # pulp[cbc] extra is not used: it ships a CBC devel build that solves the captured requests
-# 1.5 to 3 times slower than the 2.10 releases. amd64 gets the 2.10.10 release build that has
+# 1.5 to 3 times slower than the 2.10 releases. amd64 gets the 2.10.13 release build, the 2.10 line that has
 # been serving production, arm64 the Debian 2.10 package.
 RUN --mount=from=builder,source=/tmp/cbc.tar.gz,target=/tmp/cbc.tar.gz set -eu; \
     if [ "$TARGETARCH" = "amd64" ]; then \
