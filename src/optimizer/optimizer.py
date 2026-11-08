@@ -1271,6 +1271,12 @@ class Optimizer:
                 probe_failed = True
                 probe = 0
 
+        # an infeasible model stays infeasible on the split, which would only spend the cost stage on it
+        if probe != 0 and self.stats.status == pulp.LpSolveStatus.Infeasible and not self.stats.has_solution:
+            self.solve_path = 'joint'
+            self.preference_stage = 'not needed'
+            return
+
         # a run stopped by the clock reports TimeLimit and carries whatever it found in has_solution.
         # Proven is what the probe is asking.
         if probe != 0 and self.stats.status in PROVEN and self._is_feasible():
