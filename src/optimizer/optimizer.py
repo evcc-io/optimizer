@@ -520,7 +520,7 @@ class Optimizer:
             ] if bat.c_max > 0 or bat.d_max > 0 else [0] * self.T
 
         # hedge against forecast errors, see _add_uncertainty_constraints. All continuous.
-        if self.uncertainty.active():
+        if self._hedged():
             # net deviation per step not absorbed by export, Wh. Steps without a deviation stay 0
             self.variables['u_dev'] = [self.problem.add_variable(f"u_dev_{t}", lowBound=0) if self._deviation(t) > 0 else 0
                                        for t in self.time_steps]
@@ -623,7 +623,7 @@ class Optimizer:
         # price that energy would have earned, and the export it takes away. A negative price would
         # reward drawing more, so it is floored at zero. The export loss is dualised in units of
         # penalty_base so its coefficients stay at the price magnitude the scaling anchors on.
-        if self.uncertainty.active():
+        if self._hedged():
             for t in self.time_steps:
                 objective -= self.variables['u_imp'][t] * max(self.time_series.p_N[t], 0)
             objective -= self.variables['u_res'] * max(np.max(self.time_series.p_E), 0)
@@ -893,6 +893,10 @@ class Optimizer:
                 self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
                                  * (1 - self.variables['z_cd'][i][t]))
 
+    def _hedged(self) -> bool:
+        """Whether the model carries the hedge: a budget, and a step whose forecast can deviate."""
+        return self.uncertainty.active() and any(self._deviation(t) > 0 for t in self.time_steps)
+
     def _deviation(self, t: int) -> float:
         """Adverse forecast deviation of step t in Wh: less solar and more demand at once."""
         return self.uncertainty.ft_dev * self.time_series.ft[t] + self.uncertainty.gt_dev * self.time_series.gt[t]
@@ -928,7 +932,7 @@ class Optimizer:
         Without it, exporting instead of storing would hedge for free and win the tie against
         storing; with it the two cost the same in the worst case and the preferences decide.
         """
-        if not self.uncertainty.active():
+        if not self._hedged():
             return
 
         reserve_batteries = [i for i, bat in enumerate(self.batteries) if bat.d_max > 0]

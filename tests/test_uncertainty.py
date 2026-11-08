@@ -44,6 +44,18 @@ def test_without_a_budget_the_model_is_unchanged():
     assert len(disabled.problem.constraints()) == len(plain.problem.constraints())
 
 
+def test_without_a_deviation_the_model_is_unchanged():
+    # no solar to fall short and no demand deviation: nothing to hedge, so no extra rows either
+    plain = build()
+    plain.time_series.ft = [0] * 6
+    plain.create_model()
+    idle = build(UncertaintyConfig(ft_dev=0.5, gt_dev=0, budget=2))
+    idle.time_series.ft = [0] * 6
+    idle.create_model()
+    assert len(idle.problem.variables()) == len(plain.problem.variables())
+    assert len(idle.problem.constraints()) == len(plain.problem.constraints())
+
+
 def test_the_hedge_charges_from_grid_before_an_uncertain_day():
     nominal = build()
     assert nominal.solve()['status'] == 'Optimal'
