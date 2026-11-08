@@ -846,9 +846,8 @@ class Optimizer:
             options.pop('logPath', None)
             # HiGHS also stops at a relative gap of 1e-4 by default, CBC only on the absolute one
             options.setdefault('gapRel', 0)
-            # cut separation at tree nodes and the feasibility jump heuristic cost more than they win on
-            # this model: without them 60 captured requests solve 5 to 6 percent faster and 10 more of
-            # the 180 stage solves prove the joint probe inside its 2 s. Neither moves the proven optima
+            # trees here are a handful of nodes, so node cuts and the feasibility jump cost more than they
+            # win: 60 captured requests solve 5 to 6 percent faster without them, optima unchanged, see #320
             options.setdefault('mip_allow_cut_separation_at_nodes', False)
             options.setdefault('mip_heuristic_run_feasibility_jump', False)
             if self._cutoff is not None:
