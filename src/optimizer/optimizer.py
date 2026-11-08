@@ -1,8 +1,11 @@
 import os
+import re
+import subprocess
 import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from functools import cache
 from math import isfinite
 from tempfile import TemporaryDirectory
 from typing import Dict, List, Optional
@@ -249,6 +252,19 @@ class TimeSeriesData:
     ft: List[float]  # Forecasted production [Wh]
     p_N: List[float]  # Import prices [currency unit/Wh]
     p_E: List[float]  # Export prices [currency unit/Wh]
+
+
+@cache
+def cbc_takes_mip_start(path: str) -> bool:
+    """Whether the CBC binary at path handles a MIP start on a maximization model.
+
+    Before 2.10.13 CBC set the cutoff of a MIP start with the sign of a minimization (Cbc bc74ac62).
+    On this model that returned a worse schedule as proven optimal, or declared it infeasible over a
+    cost bound the start satisfies. The image ships 2.10.13 on amd64 and Debian's 2.10.12 on arm64.
+    """
+    banner = subprocess.run([path], input='', capture_output=True, text=True, timeout=10, check=False).stdout
+    version = re.search(r'Version: (\d+)\.(\d+)\.(\d+)', banner)
+    return version is not None and tuple(map(int, version.groups())) >= (2, 10, 13)
 
 
 class Optimizer:
@@ -859,9 +875,11 @@ class Optimizer:
 
         # pulp resolves the binary unless one is configured: a cbc on PATH, the 2.10 release build
         # the image installs. The cbcbox wheel of the pulp cbc extra is deliberately not used, its
-        # devel build solves the captured requests 1.5 to 3 times slower
+        # devel build solves the captured requests 1.5 to 3 times slower.
         solver = pulp.COIN_CMD(path=self.settings.cbc_path, msg=0, threads=self.settings.num_threads, **options)
         solver.tmpDir = tmpdir
+        if options.get('warmStart') and not cbc_takes_mip_start(solver.path):
+            del solver.optionsDict['warmStart']
         return solver
 
     def _solve(self, solver) -> pulp.LpSolveStats:
@@ -1049,16 +1067,11 @@ class Optimizer:
         else:
             if remaining is not None:
                 remaining = min(remaining, self._clock(MILP_PREFERENCE_TIME_SHARE))
-            # no warm start, although a feasible solution is right there in the variables. CBC
-            # 2.10.3, which pulp 3 bundled, mishandled a MIP start on this model: it returned a
-            # strictly worse schedule and reported it as proven optimal, and it declared the model
-            # infeasible over a cost bound the start itself satisfies. Measured on one captured
-            # request, preference -0.806 warm against -0.610 cold, the cold value matching a single
-            # joint solve to the last digit. Fixed upstream, the same LP and the same start file
-            # come back identical to the cold run on CBC 2.10.13, but the image ships 2.10.10 and
-            # that one has not been checked, so this stays until it is.
+            # the best schedule so far is a feasible start for the MILP, handed on as a MIP start
+            for var, value in best.items():
+                var.varValue = value
             with self._timed('tie_break'):
-                stats = self._solve(self._solver(tmpdir, timeLimit=remaining))
+                stats = self._solve(self._solver(tmpdir, timeLimit=remaining, warmStart=True))
             stages.append('MILP ' + stats.status_str + ('' if keep(stats) else ' unused'))
 
         self.preference_stage = ', '.join(stages)
@@ -1116,8 +1129,12 @@ class Optimizer:
                 if remaining <= 0:
                     self.continuity_stage = 'no time'
                     return
+            # the schedule in the variables is a feasible start; a start variable at 1 holds its row
+            by_name = {var.name: value for var, value in solution.items()}
+            for var in candidate.variables():
+                var.varValue = by_name.get(var.name, 1.)
             with self._timed('continuity'), self._hard_limit(remaining + CUTOFF_MARGIN):
-                stats = candidate.solve(self._solver(tmpdir, timeLimit=remaining))
+                stats = candidate.solve(self._solver(tmpdir, timeLimit=remaining, warmStart=True))
             self.continuity_stage = 'MILP ' + stats.status_str + ' unused'
             if not stats.has_solution or not _complete_solution(candidate):
                 return
@@ -1277,9 +1294,10 @@ class Optimizer:
         reserve = (0. if self.settings.time_limit is None
                    else self.settings.time_limit * PREFERENCE_TIME_SHARE)
         remaining = None if deadline is None else max(min(self._clock(COST_TIME_SHARE), deadline - reserve - time.monotonic()), 0.1)
+        # the probe's schedule is the first incumbent, a bound under the search from the start
         with self._timed('cost'):
             self.stats = self._solve(self._solver(tmpdir, timeLimit=remaining, gapAbs=scaled_gap,
-                                                  logPath=os.path.join(tmpdir, 'cost.log')))
+                                                  logPath=os.path.join(tmpdir, 'cost.log'), warmStart=fallback is not None))
         self.cost_stage_gap = self._stage_gap(self.stats, scale)
 
         if self.stats.has_solution and self._is_feasible():
