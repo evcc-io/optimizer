@@ -94,7 +94,8 @@ DUMP_GAP = 1.0
 def dump_slow_request(payload, elapsed, gap, status=None, subject=None, client=None):
     """Persist requests worth replaying: those that exhausted the solver time limit, those the
     cost stage left more than DUMP_GAP of money unproven on, and those that came back without a
-    schedule: infeasible, or not solved within the stage caps.
+    schedule: infeasible, not solved within the stage caps, or failed with an exception, whose
+    class name is the status.
 
     The elapsed time covers model building as well as solving, so a request that only exceeds
     the limit while building is caught too. That one is equally worth looking at.
@@ -406,6 +407,9 @@ class OptimizeCharging(Resource):
             return result
 
         except Exception as e:
+            # a failing solve is deterministic per request, so the dump is what makes it reproducible
+            dump_slow_request(data, time.perf_counter() - g.started, None, type(e).__name__, g.get('subject'),
+                              request.headers.get('User-Agent'))
             api.abort(500, f"Optimization failed: {str(e)}")
 
 

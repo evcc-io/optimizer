@@ -14,9 +14,10 @@ from optimizer.app import app, settings
 
 @pytest.mark.parametrize('test_case', pathlib.Path('test_cases').glob('*.json'))
 def test_optimizer(test_case: pathlib.Path, monkeypatch):
-    # stored objectives are proven optima. The production gap may stop a cent or two short of
-    # them, 020 lands 1.2 ct below at 2 ct, so compare at the one cent they were recorded with
-    monkeypatch.setenv("OPTIMIZER_GAP_ABS", "0.01")
+    # stored objectives are proven optima, so compare with the gap closed. Any open gap lets each
+    # CBC build stop on an incumbent of its own: at one cent 020 lands 0.6 ct short on CBC 2.10.13
+    # and on the optimum with 2.10.10. Closed, the suite runs no slower
+    monkeypatch.setenv("OPTIMIZER_GAP_ABS", "0")
     client = app.test_client()
 
     test_data = json.loads(test_case.read_text())
@@ -207,6 +208,27 @@ def test_unsolved_requests_are_dumped(tmp_path, monkeypatch):
 
     line = json.loads(dump.read_text())
     assert line["status"] == "Not Solved"
+    assert line["request"] == request
+
+
+def test_failed_requests_are_dumped(tmp_path, monkeypatch):
+    # a solve that raises fails the same way on every retry of the same input, and the 500 carries
+    # only the message: the dump is the only record of what was asked
+    def fails(self, *args, **kwargs):
+        raise RuntimeError("solver failed")
+
+    request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
+    dump = tmp_path / "failed.jsonl"
+    monkeypatch.setattr(settings, "dump_slow_requests", str(dump))
+    monkeypatch.setattr(pulp.LpProblem, "solve", fails)
+    client = app.test_client()
+
+    response = client.post("/optimize/charge-schedule", json=request, headers={"User-Agent": "evcc/0.318.2"})
+    assert response.status_code == 500
+
+    line = json.loads(dump.read_text())
+    assert line["status"] == "RuntimeError"
+    assert line["client"] == "evcc/0.318.2"
     assert line["request"] == request
 
 
