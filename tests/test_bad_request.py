@@ -121,6 +121,17 @@ def test_non_positive_step_names_the_field(payload, dt):
     assert list(response.json['details']) == ['time_series.dt.1']
 
 
+@pytest.mark.parametrize('series', ['gt', 'ft'])
+def test_absurd_step_energy_names_the_step(payload, series):
+    # a broken household profile sent 1e16 Wh, which HiGHS cannot solve: it ended Not Solved
+    payload['time_series'][series][1] = 1.47e16
+
+    response = app.test_client().post('/optimize/charge-schedule', json=payload)
+
+    assert response.status_code == 400
+    assert list(response.json['details']) == [f'time_series.{series}.1']
+
+
 def test_client_version_is_logged(payload, capsys):
     payload['time_series']['p_N'] = [0.0003]
 

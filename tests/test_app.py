@@ -190,10 +190,14 @@ def test_infeasible_requests_are_dumped_with_their_subject(tmp_path, monkeypatch
 
 
 def test_an_infeasible_probe_is_reported_without_the_split(monkeypatch):
-    # production: a demand forecast of 1e36 Wh in a few slots. CBC proves it infeasible in the probe,
-    # the split handed it to HiGHS, which refuses bounds past 1e20 and returned no solution at all
+    # a probe CBC proves infeasible went on to the split, which solved the same model again on HiGHS.
+    # The production case, 1e36 Wh of demand, is now a 400, so the infeasibility is simulated
+    original = pulp.LpProblem.solve
+
+    def infeasible(self, *args, **kwargs):
+        return dataclasses.replace(original(self, *args, **kwargs), status=pulp.LpSolveStatus.Infeasible, has_solution=False)
+
     request = json.loads(pathlib.Path('test_cases/009-discharge-before-import.json').read_text())["request"]
-    request["time_series"]["gt"][3] = 1e36
     stages = []
     solve = Optimizer._solve
 
@@ -202,6 +206,7 @@ def test_an_infeasible_probe_is_reported_without_the_split(monkeypatch):
         return solve(self, solver)
 
     monkeypatch.setattr(settings, "solver", "hybrid")
+    monkeypatch.setattr(pulp.LpProblem, "solve", infeasible)
     monkeypatch.setattr(Optimizer, "_solve", record)
     body = app.test_client().post("/optimize/charge-schedule", json=request).json
 
