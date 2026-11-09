@@ -15,7 +15,7 @@ Inspired by https://github.com/Akkudoktor-EOS/EOS/pull/462
 - **Respects charging goals**: an EV can be required to reach a given state of charge by a given time step, or to charge at a minimum power while it is plugged in.
 - **Honours grid limits** for import and export power, and supports a demand rate charged on the highest power drawn beyond a threshold.
 - **Never returns "infeasible" for a goal it cannot reach.** Goals, minimum charge demand and grid limits are soft constraints backed by penalties, so an over-constrained request still yields the best achievable schedule plus a flag telling you which limit was violated.
-- **Optional strategies** break ties that cost nothing: charge before exporting, discharge before importing, or level grid peaks on the import side, the feed-in side, or both.
+- **Optional strategies** break ties that cost nothing: level grid peaks on the import side, the feed-in side, or both, and discharge before importing. Independently of those, `charge_early` fills the batteries as early as the rest of the model allows.
 
 ## Example
 
@@ -26,7 +26,7 @@ Two days in 15 minute steps: a 10 kWh home battery at 50 %, a 50 kWh EV at 20 % 
   <img alt="Charging plan: the EV charges through the night at 3.7 kW, PV surplus goes into the EV and then the home battery, the battery covers the evening peak" src="docs/img/example-plan-light.png">
 </picture>
 
-The EV takes its 30 kWh in the eight cheapest hours before the deadline, from 22:00 to 06:00 at full power, and stops exactly at the goal. The morning PV surplus then goes into the EV and after noon into the home battery rather than to the grid, because `charge_before_export` makes self-consumption the tie-breaker. From there the battery covers the 44 ct evening peak and the night, and the house imports nothing until the next PV surplus arrives.
+The EV takes its 30 kWh in the eight cheapest hours before the deadline, from 22:00 to 06:00 at full power, and stops exactly at the goal. The morning PV surplus then goes into the EV and after noon into the home battery rather than to the grid, because `charge_early` makes self-consumption the tie-breaker. From there the battery covers the 44 ct evening peak and the night, and the house imports nothing until the next PV surplus arrives.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-soc-dark.png">
@@ -44,6 +44,15 @@ The maximum is a single value out of the horizon, which leaves one gap: a load s
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-peak-dark.png">
   <img alt="Charging plan with attenuate_grid_peaks: the battery refill spread over the solar window and the feed-in held to a flat 1 kW plateau" src="docs/img/example-peak-light.png">
+</picture>
+
+The peak penalty says how high the grid profile may go, not when the batteries fill, and on a flat tariff nothing else decides it either — so a levelled day would otherwise return a schedule as arbitrary as no strategy at all, sitting on an empty battery for a day and a half. `charge_early` is the separate answer to that separate question: it holds the surplus back from the grid until the batteries have taken it, and pulls grid import forward for a battery that has no surplus to hold back. Because it is orthogonal, it combines with any `charging_strategy`, and on its own it is simply "fill the batteries first, shape nothing".
+
+Filling sooner is not free on either side: a battery that is full by the first hour has no room left for the midday solar peak, and one filled at full power draws a taller import peak than one trickled. Attenuation therefore keeps priority — where the two disagree, the profile the request asked to level is the one that survives. On a side a strategy levels, that peak is the entire point. On a feed-in side it does not level, there is no peak worth protecting and filling early takes it outright. Pulling grid import forward stays a pure tie break, since it would otherwise buy earliness with real money. So `attenuate_demand_peaks` with `charge_early` fills at full rate and spends the feed-in peak nobody asked it to shave, `attenuate_feedin_peaks` keeps its feed-in peak and fills at the rate levelling leaves it, and `attenuate_grid_peaks` levels both sides and so protects both. No case pays real money for the difference.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/example-early-dark.svg">
+  <img alt="Energy charged into the batteries over two days for three strategies, before and after the early charge tie break: attenuate_demand_peaks moves its half charge point from hour 45 to hour 2, the other two are unchanged" src="docs/img/example-early-light.svg">
 </picture>
 
 ## How a request is solved
@@ -90,7 +99,7 @@ Measured over 170 captured requests, 150 of them slow ones: HiGHS alone is the f
 
 ```jsonc
 {
-  "strategy": { "charging_strategy": "charge_before_export" },
+  "strategy": { "charge_early": true },
   "grid": { "p_max_exp": 7000 },                                             // W
   "batteries": [
     {
