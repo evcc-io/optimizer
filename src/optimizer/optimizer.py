@@ -306,6 +306,9 @@ class Optimizer:
         # money the cost stage could not rule out above its schedule, in currency. Zero when it
         # proved the value, None when it did not run.
         self.cost_stage_gap = None
+        # whether the money of the reported schedule is proven. The tie break proves only its own
+        # objective under the cost stage's bound, never that bound itself.
+        self.cost_stage_proven = True
         # 'joint' when the probe proved the whole objective, 'split' when it fell back
         self.solve_path = None
         # how the solve whose schedule sits in the variables ended. A stage that discards what it
@@ -1305,6 +1308,7 @@ class Optimizer:
             self.stats = self._solve(self._solver(tmpdir, timeLimit=remaining, gapAbs=scaled_gap,
                                                   logPath=os.path.join(tmpdir, 'cost.log'), warmStart=fallback is not None))
         self.cost_stage_gap = self._stage_gap(self.stats, scale)
+        self.cost_stage_proven = self.stats.status in PROVEN
 
         if self.stats.has_solution and self._is_feasible():
             # the cost stage is allowed to stop on its gap, so proven is not required of it, only
@@ -1372,7 +1376,7 @@ class Optimizer:
         # 'Optimal' claiming more than it can back is the bug. The wording is the API contract and
         # predates pulp 4, which spells NotSolved without the space.
         if self.stats and self.stats.has_solution:
-            status = 'Optimal' if self.stats.status in PROVEN else 'Feasible'
+            status = 'Optimal' if self.stats.status in PROVEN and self.cost_stage_proven else 'Feasible'
         else:
             status = STATUS_LABELS.get(self.stats.status_str if self.stats else '', 'Not Solved')
 

@@ -3,8 +3,12 @@
 The access log only carries the total response time, so stage_seconds is what production
 attributes latency with. These tests pin the keys each solve path must produce.
 """
+import dataclasses
+
+import pulp
 from test_objective_split import build
 
+from optimizer.optimizer import Optimizer
 from optimizer.settings import OptimizerSettings
 
 
@@ -34,3 +38,20 @@ def test_split_path_times_every_stage():
     assert optimizer.cost_stage_value is not None
     assert optimizer.cost_stage_gap is not None
     assert optimizer.cost_stage_gap >= 0
+
+
+def test_split_with_cost_stage_stopped_by_the_clock_is_feasible(monkeypatch):
+    # the tie break LP always proves itself, which must not turn the cut off money into Optimal
+    original = Optimizer._solve
+
+    def cost_stopped(self, solver):
+        stats = original(self, solver)
+        return dataclasses.replace(stats, status=pulp.LpSolveStatus.TimeLimit) if self._stage == 'cost' else stats
+
+    monkeypatch.setattr(Optimizer, '_solve', cost_stopped)
+    optimizer = build('026-attenuate-grid-peaks')
+    optimizer.settings = OptimizerSettings(probe_seconds=0)
+    result = optimizer.solve()
+
+    assert optimizer.solve_path == 'split'
+    assert result['status'] == 'Feasible', result['status']
