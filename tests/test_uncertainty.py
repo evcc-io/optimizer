@@ -39,6 +39,8 @@ def night_import(optimizer):
     (UncertaintyConfig(ft_dev=0.5, gt_dev=0.2, budget=0), None),
     # no solar to fall short and no demand deviation: nothing to hedge
     (UncertaintyConfig(ft_dev=0.5, gt_dev=0, budget=2), [0] * 6),
+    # the shortfall stays within the surplus the battery cannot take, which is spilled anyway
+    (UncertaintyConfig(ft_dev=0.2, gt_dev=0, budget=2), [0, 0, 20000, 20000, 0, 0]),
 ])
 def test_without_anything_to_hedge_the_model_is_unchanged(uncertainty, ft):
     models = [build(), build(uncertainty)]

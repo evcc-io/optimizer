@@ -877,8 +877,15 @@ class Optimizer:
         return self.uncertainty.active() and any(self._deviation(t) > 0 for t in self.time_steps)
 
     def _deviation(self, t: int) -> float:
-        """Adverse forecast deviation of step t in Wh: less solar and more demand at once."""
-        return self.uncertainty.ft_dev * self.time_series.ft[t] + self.uncertainty.gt_dev * self.time_series.gt[t]
+        """Adverse forecast deviation of step t in Wh, less solar and more demand at once, beyond what the step spills anyway.
+
+        Surplus above what all batteries can take in the step is exported or curtailed whatever the
+        schedule, so a shortfall up to it only reduces that and never reaches the batteries.
+        """
+        ts = self.time_series
+        deviation = self.uncertainty.ft_dev * ts.ft[t] + self.uncertainty.gt_dev * ts.gt[t]
+        spill = ts.ft[t] - ts.gt[t] - sum(bat.c_max for bat in self.batteries) * ts.dt[t] / 3600.
+        return max(deviation - max(spill, 0), 0)
 
     def _worst_deviation(self) -> np.ndarray:
         """Budgeted worst case cumulative deviation per step: the largest `budget` deviations up to it, Wh."""
@@ -914,9 +921,10 @@ class Optimizer:
         a reserve buys nothing and the step carries no row, so a flat tariff never charges one from
         the grid at the round trip loss.
 
-        The schedule pays the worst of these over the horizon, u_cost. A deviation the plan would
-        absorb by exporting less is counted too, which leans the hedge to the safe side on sunny
-        steps with export.
+        The schedule pays the worst of these over the horizon, u_cost. Surplus the batteries cannot
+        take absorbs a deviation for certain, see _deviation. Export the schedule only chooses is not
+        known before the solve, so a deviation it would absorb still counts, which leans the hedge to
+        the safe side on sunny steps.
         """
         if not self._hedged():
             return
