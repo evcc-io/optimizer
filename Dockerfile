@@ -53,6 +53,7 @@ ENV OPTIMIZER_TIME_LIMIT=10
 ENV OPTIMIZER_NUM_THREADS=1
 # the access log is the only source of per request latency, keep the format lean.
 # the config module reaps solvers left behind by a killed worker, see gunicorn_conf.py
-ENV GUNICORN_CMD_ARGS="--workers 4 --max-requests 32 --config python:optimizer.gunicorn_conf --access-logfile - --access-logformat '%(m)s %(U)s %(s)s %(D)s'"
+# the control socket would go to the missing home of the app user and nothing uses it
+ENV GUNICORN_CMD_ARGS="--workers 4 --max-requests 32 --no-control-socket --config python:optimizer.gunicorn_conf --access-logfile - --access-logformat '%(m)s %(U)s %(s)s %(D)s'"
 USER app
 CMD ["/app/.venv/bin/gunicorn", "--bind", "0.0.0.0:7050", "optimizer.app:app"]
