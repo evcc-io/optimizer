@@ -384,6 +384,7 @@ components:
           items:
             type: number
             minimum: 0
+            maximum: 100000000
           description: Household energy demand at each time step (Wh)
           example: [3000, 4000, 5000, 4500, 3500, 3000]
         ft:
@@ -391,6 +392,7 @@ components:
           items:
             type: number
             minimum: 0
+            maximum: 100000000
           description: Forecasted energy generation (e.g., solar PV) at each time step (Wh)
           example: [2000, 6000, 8000, 7000, 4000, 1000]
         p_N:

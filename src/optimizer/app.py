@@ -189,12 +189,19 @@ battery_config_model = api.model('BatteryConfig', {
     'c_priority': fields.Integer(required=False, description='Charging and discharging priority compared to other batteries. 2 = highest priority.')
 })
 
+# 100 MWh per step, far above any site evcc serves
+MAX_STEP_ENERGY = 1e8
+
 time_series_model = api.model('TimeSeries', {
     # the example is what the Swagger UI on / prefills, one step like its other series. A zero length step divides by zero
     'dt': fields.List(fields.Float(exclusiveMin=0), required=True, example=[3600],
                       description='duration in seconds for each time step (s)'),
-    'gt': fields.List(fields.Float, required=True, description='Required energy for home consumption at each time step (Wh)'),
-    'ft': fields.List(fields.Float, required=True, description='Forecasted solar generation at each time step (Wh)'),
+    # a broken household profile sent 1e9 to 1e16 Wh per step: HiGHS returns no solution for such
+    # coefficients and the request ended Not Solved instead of naming the bad step
+    'gt': fields.List(fields.Float(max=MAX_STEP_ENERGY), required=True,
+                      description='Required energy for home consumption at each time step (Wh)'),
+    'ft': fields.List(fields.Float(max=MAX_STEP_ENERGY), required=True,
+                      description='Forecasted solar generation at each time step (Wh)'),
     'p_N': fields.List(fields.Float, required=True, description='Price per Wh taken from grid at each time step'),
     'p_E': fields.List(fields.Float, required=True, description='Remuneration per Wh fed into grid at each time step'),
 })
