@@ -75,8 +75,8 @@ def test_the_hedge_is_capped_by_its_budget():
 
 
 def test_a_battery_the_grid_cannot_charge_still_stores_the_solar():
-    # exporting the solar instead of storing it would make the plan immune to a shortfall, but it
-    # loses the same money for certain. The worst case ties, and the preference keeps the storing.
+    # stored solar is the reserve that covers a shortfall, so the hedge neither exports it nor holds
+    # it back past the evening, where a held reserve only ties the worst case
     nominal = build(charge_from_grid=False)
     nominal.solve()
     hedged = build(UncertaintyConfig(ft_dev=0.5, budget=2), charge_from_grid=False)

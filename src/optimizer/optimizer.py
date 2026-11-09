@@ -921,10 +921,8 @@ class Optimizer:
         a reserve buys nothing and the step carries no row, so a flat tariff never charges one from
         the grid at the round trip loss.
 
-        The schedule pays the worst of these over the horizon, u_cost. Surplus the batteries cannot
-        take absorbs a deviation for certain, see _deviation. Export the schedule only chooses is not
-        known before the solve, so a deviation it would absorb still counts, which leans the hedge to
-        the safe side on sunny steps.
+        The schedule pays the worst of these over the horizon, u_cost. Export the schedule only
+        chooses is not known before the solve, so a deviation it would absorb still counts.
         """
         if not self._hedged():
             return
