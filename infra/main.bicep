@@ -153,7 +153,8 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
               // 100 a worker recycled somewhere between 100 and 600 requests, so at roughly one
               // request per second per replica it restarted every 2 to 10 minutes and paid a cold
               // start each time. 50 keeps the staggering that stops replicas recycling in lockstep.
-              value: '--workers 1 --timeout 60 --max-requests 100 --max-requests-jitter 50 --config python:optimizer.gunicorn_conf --access-logfile - --access-logformat \'%(m)s %(U)s %(s)s %(D)s\''
+              // this value replaces the Dockerfile's, so it repeats --no-control-socket, see there
+              value: '--workers 1 --timeout 60 --max-requests 100 --max-requests-jitter 50 --no-control-socket --config python:optimizer.gunicorn_conf --access-logfile - --access-logformat \'%(m)s %(U)s %(s)s %(D)s\''
             }
             { name: 'JWT_TOKEN_SECRET', secretRef: 'jwt-token-secret' }
             // plan explanations, /optimize/explain
