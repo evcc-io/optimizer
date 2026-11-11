@@ -123,3 +123,34 @@ def test_a_stored_case_solves_with_a_budget():
     response = app.test_client().post('/optimize/charge-schedule', json=request)
     assert response.status_code == 200
     assert response.json['status'] == 'Optimal'
+
+
+# three equal days in hourly steps: six cheap night hours, solar around noon, the rest at the high price
+def days(uncertainty):
+    return Optimizer(
+        strategy=OptimizationStrategy('charge_before_export', 'none'),
+        grid=GridConfig(p_max_imp=None, p_max_exp=None, prc_p_exc_imp=None),
+        batteries=[BatteryConfig(charge_from_grid=True, discharge_to_grid=False, s_capacity=10000,
+                                 s_min=1000, s_max=10000, s_initial=5000, c_min=0, c_max=4000, d_max=5000, p_a=1.8e-4)],
+        time_series=TimeSeriesData(dt=[3600] * 72, gt=[500] * 72,
+                                   ft=([0] * 8 + [1500, 3000, 4000, 4000, 3000, 1500] + [0] * 10) * 3,
+                                   p_N=([2e-4] * 6 + [3e-4] * 18) * 3, p_E=[0.8e-4] * 72),
+        eta_c=0.9, eta_d=0.9, uncertainty=uncertainty)
+
+
+def test_the_hedge_does_not_discharge_into_a_cheap_night_to_charge_it_back():
+    # booking the worst case import at the night price must not need a discharge the same night undoes
+    hedged = days(UncertaintyConfig(ft_dev=0.6, gt_dev=0.1, budget=6))
+    assert hedged.solve()['status'] == 'Optimal'
+    for night in (0, 24, 48):
+        discharged, charged = (sum(pulp.value(hedged.variables[key][0][t]) for t in range(night, night + 6))
+                               for key in 'dc')
+        assert min(discharged, charged) == pytest.approx(0, abs=1)
+
+
+def test_the_reserve_does_not_grow_with_the_days_planned():
+    # the worst case looks back one day, so equal days hold an equal reserve
+    hedged = days(UncertaintyConfig(ft_dev=0.4, gt_dev=0.1, budget=6))
+    assert hedged.solve()['status'] == 'Optimal'
+    lowest = [min(pulp.value(hedged.variables['s'][0][t]) for t in range(day, day + 24)) for day in (24, 48)]
+    assert lowest[1] == pytest.approx(lowest[0], abs=1)

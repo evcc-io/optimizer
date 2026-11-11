@@ -302,7 +302,7 @@ type OptimizationInput struct {
 	Strategy   OptimizerStrategy `json:"strategy,omitempty"`
 	TimeSeries TimeSeries        `json:"time_series"`
 
-	// Uncertainty Forecast uncertainty the schedule hedges against. Every step may deliver ft_dev less solar and gt_dev more demand than forecast, but at most budget steps do so at once. The schedule then carries the extra import the worst such case forces as a cost. Omitted, or a budget of 0, plans on the forecast as sent.
+	// Uncertainty Forecast uncertainty the schedule hedges against. Every step may deliver ft_dev less solar and gt_dev more demand than forecast, but at most budget steps do so within a day. The schedule then carries the extra import the worst such case forces as a cost. Omitted, or a budget of 0, plans on the forecast as sent.
 	Uncertainty Uncertainty `json:"uncertainty,omitempty"`
 }
 
@@ -408,9 +408,9 @@ type TimeSeries struct {
 	PN []float32 `json:"p_N"`
 }
 
-// Uncertainty Forecast uncertainty the schedule hedges against. Every step may deliver ft_dev less solar and gt_dev more demand than forecast, but at most budget steps do so at once. The schedule then carries the extra import the worst such case forces as a cost. Omitted, or a budget of 0, plans on the forecast as sent.
+// Uncertainty Forecast uncertainty the schedule hedges against. Every step may deliver ft_dev less solar and gt_dev more demand than forecast, but at most budget steps do so within a day. The schedule then carries the extra import the worst such case forces as a cost. Omitted, or a budget of 0, plans on the forecast as sent.
 type Uncertainty struct {
-	// Budget Steps that deviate adversely at once, may be fractional
+	// Budget Steps that deviate adversely within a day, may be fractional
 	Budget float32 `json:"budget,omitempty"`
 
 	// FtDev Share of the solar forecast each step may fall short of

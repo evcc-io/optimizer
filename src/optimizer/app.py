@@ -211,7 +211,7 @@ time_series_model = api.model('TimeSeries', {
 uncertainty_model = api.model('Uncertainty', {
     'ft_dev': fields.Float(required=False, min=0, max=1, description='Share of the solar forecast each step may fall short of, 0 to 1'),
     'gt_dev': fields.Float(required=False, min=0, max=1, description='Share of the demand forecast each step may exceed, 0 to 1'),
-    'budget': fields.Float(required=False, min=0, description='Steps that deviate adversely at once. 0 disables the hedge'),
+    'budget': fields.Float(required=False, min=0, description='Steps that deviate adversely within a day. 0 disables the hedge'),
 })
 
 optimization_input_model = api.model('OptimizationInput', {

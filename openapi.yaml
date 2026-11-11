@@ -412,7 +412,7 @@ components:
       type: object
       description: >-
         Forecast uncertainty the schedule hedges against. Every step may deliver ft_dev less solar and
-        gt_dev more demand than forecast, but at most budget steps do so at once. The schedule then
+        gt_dev more demand than forecast, but at most budget steps do so within a day. The schedule then
         carries the extra import the worst such case forces as a cost. Omitted, or a budget of 0,
         plans on the forecast as sent.
       properties:
@@ -434,7 +434,7 @@ components:
           type: number
           minimum: 0
           default: 0
-          description: Steps that deviate adversely at once, may be fractional
+          description: Steps that deviate adversely within a day, may be fractional
           example: 8
 
     OptimizationInput:
