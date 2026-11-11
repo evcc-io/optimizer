@@ -144,7 +144,7 @@ def test_the_hedge_does_not_discharge_into_a_cheap_night_to_charge_it_back():
     assert hedged.solve()['status'] == 'Optimal'
     for night in (0, 24, 48):
         discharged, charged = (sum(pulp.value(hedged.variables[key][0][t]) for t in range(night, night + 6))
-                               for key in 'dc')
+                               for key in ('d', 'c'))
         assert min(discharged, charged) == pytest.approx(0, abs=1)
 
 

@@ -532,7 +532,6 @@ class Optimizer:
             self.variables['u_imp'] = [self.problem.add_variable(f"u_imp_{t}", lowBound=0) for t in self.time_steps]
             self.variables['u_imp_sum'] = [self.problem.add_variable(f"u_imp_sum_{t}", lowBound=0) for t in self.time_steps]
             self.variables['u_chg'] = [self.problem.add_variable(f"u_chg_{t}", lowBound=0) for t in self.time_steps]
-            self.variables['u_rel'] = [self.problem.add_variable(f"u_rel_{t}", lowBound=0) for t in self.time_steps]
             self.variables['u_res'] = self.problem.add_variable("u_res", lowBound=0)
 
     def _setup_target_function(self):
@@ -922,7 +921,7 @@ class Optimizer:
         Every step may deliver ft_dev less solar and gt_dev more demand than forecast, but no more
         than `budget` steps do so within a day. The deviation is taken from the forecast alone, so
         the worst case up to each step, the sum of the day's largest deviations within the budget,
-        is known before the solve and needs no dual: four variables and a handful of rows per step.
+        is known before the solve and needs no dual: three variables and a handful of rows per step.
 
         A shortfall up to step t drains the batteries below the plan. The reserve they hold above
         s_min at t, in load Wh, covers it, and what is left has been imported by then: u_imp_sum
@@ -937,8 +936,8 @@ class Optimizer:
         grid with the charge power the schedule leaves unused, at the round trip. Without it the
         schedule discharges into a cheap step only to book the import there, and charges it back.
 
-        The worst case looks back one day, see HEDGE_WINDOW, so it also falls. u_rel releases what
-        was booked against deviations that have left the window.
+        The worst case looks back one day, see HEDGE_WINDOW, so it also falls, and u_imp_sum with
+        it: what was booked against deviations that have left the window is released.
 
         The reserve the worst case consumes instead, u_res, is priced at the export price, the
         least that energy would have earned the plan. Free, the hedge would buy a reserve from the
@@ -956,8 +955,7 @@ class Optimizer:
         for t in self.time_steps:
             running = self.variables['u_imp_sum'][t]
             u_imp, u_chg = self.variables['u_imp'][t], self.variables['u_chg'][t]
-            self.problem += running == ((self.variables['u_imp_sum'][t - 1] if t > 0 else 0)
-                                        + u_imp + u_chg - self.variables['u_rel'][t])
+            self.problem += running <= (self.variables['u_imp_sum'][t - 1] if t > 0 else 0) + u_imp + u_chg
             # extra import replaces a discharge the shortfall made impossible or covers the shortfall
             # as it arrives, it cannot be booked ahead at a cheaper step
             discharge = pulp.lpSum(self.variables['d'][i][t] for i in reserve_batteries)
