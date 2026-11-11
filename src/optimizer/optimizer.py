@@ -525,7 +525,9 @@ class Optimizer:
 
         # worst case recourse cost of the forecast error, see _add_uncertainty_constraints
         if self._hedged():
-            self.variables['u_cost'] = self.problem.add_variable("u_cost", lowBound=0)
+            self.variables['u_imp'] = [self.problem.add_variable(f"u_imp_{t}", lowBound=0) for t in self.time_steps]
+            self.variables['u_imp_sum'] = [self.problem.add_variable(f"u_imp_sum_{t}", lowBound=0) for t in self.time_steps]
+            self.variables['u_res'] = self.problem.add_variable("u_res", lowBound=0)
 
     def _setup_target_function(self):
         """
@@ -604,10 +606,13 @@ class Optimizer:
                 # decrease penalty slightly over time to push limit exceeding to late times
                 objective += - self.prc_e_grid_exp_pen * (1.0 - t * 1e-5) * self.variables['e_exp_lim_exc'][t]
 
-        # cost of the budgeted forecast error, see _add_uncertainty_constraints. Held in units of
-        # penalty_base so its coefficients stay at the price magnitude the scaling anchors on.
+        # cost of the budgeted forecast error, see _add_uncertainty_constraints: the extra import it
+        # forces at the import price of the step it is drawn in, and the reserve it consumes at the
+        # export price. A negative price would reward drawing more, so it is floored at zero.
         if self._hedged():
-            objective -= self.penalty_base * self.variables['u_cost']
+            for t in self.time_steps:
+                objective -= self.variables['u_imp'][t] * max(self.time_series.p_N[t], 0) * (1 - HEDGE_TIE_DISCOUNT)
+            objective -= self.variables['u_res'] * max(np.max(self.time_series.p_E), 0) * (1 - HEDGE_TIE_DISCOUNT)
 
         # everything above is real money. It is kept separate from the preference terms below
         # because solve() optimizes the two in sequence, see _solve_preferences().
@@ -911,36 +916,44 @@ class Optimizer:
         Every step may deliver ft_dev less solar and gt_dev more demand than forecast, but no more
         than `budget` steps do so at once. The deviation is taken from the forecast alone, so the
         worst case up to each step, the sum of its largest deviations within the budget, is known
-        before the solve and needs no dual: one row per step and a single variable.
+        before the solve and needs no dual: two variables and a handful of rows per step.
 
         A shortfall up to step t drains the batteries below the plan. The reserve they hold above
-        s_min at t, in load Wh, covers it, and what is left is imported at that step's price. A
-        reserve that covers it is consumed instead, losing what the plan books on it: the end of
-        horizon value or the export price, whichever is higher. Only the margin of the import price
-        over that value is at stake, which is what the row prices. Where the margin is not positive
-        a reserve buys nothing and the step carries no row, so a flat tariff never charges one from
-        the grid at the round trip loss.
+        s_min at t, in load Wh, covers it, and what is left has been imported by then: u_imp_sum
+        is the worst case import up to t, u_imp what step t adds at its own import price. Every
+        step is priced, so a step no reserve can cover does not leave the others free to drain.
 
-        The schedule pays the worst of these over the horizon, u_cost. Export the schedule only
-        chooses is not known before the solve, so a deviation it would absorb still counts.
+        Extra import is bounded by what the schedule discharges at that step plus the worst case
+        arriving in it: it replaces a discharge the shortfall has made impossible, or covers the
+        shortfall as it arrives, and cannot be booked ahead at a cheaper price.
+
+        The reserve the worst case consumes instead, u_res, is priced at the export price, the
+        least that energy would have earned the plan. Free, the hedge would buy a reserve from the
+        grid on a flat tariff, where a shortfall costs the same whenever it is imported.
+
+        Export the schedule only chooses is not known before the solve, so a deviation it would
+        absorb still counts.
         """
         if not self._hedged():
             return
 
         reserve_batteries = [i for i, bat in enumerate(self.batteries) if bat.d_max > 0]
-        # per load Wh: export earns p_E on what reaches the grid, p_a is booked on what stays stored
-        held = max([max(self.time_series.p_E, default=0)] + [self.batteries[i].p_a / self.eta_d for i in reserve_batteries])
         worst = self._worst_deviation()
 
         for t in self.time_steps:
-            # a reserve that only ties the worst case is not worth giving up the forecast's schedule for
-            margin = (self.time_series.p_N[t] - held) * (1 - HEDGE_TIE_DISCOUNT)
-            if worst[t] <= 0 or margin <= 0:
-                continue
+            running = self.variables['u_imp_sum'][t]
+            self.problem += running == (self.variables['u_imp_sum'][t - 1] if t > 0 else 0) + self.variables['u_imp'][t]
+            # extra import replaces a discharge the shortfall made impossible or covers the shortfall
+            # as it arrives, it cannot be booked ahead at a cheaper step
+            discharge = pulp.lpSum(self.variables['d'][i][t] for i in reserve_batteries)
+            self.problem += self.variables['u_imp'][t] <= discharge + worst[t] - (worst[t - 1] if t > 0 else 0)
             # stored Wh reach the load at the discharge efficiency
             reserve = self.eta_d * pulp.lpSum(self.variables['s'][i][t] - self.batteries[i].s_min
                                               + self.variables['s_min_pen'][i][t] for i in reserve_batteries)
-            self.problem += self.variables['u_cost'] >= margin / self.penalty_base * (worst[t] - reserve)
+            self.problem += running >= worst[t] - reserve
+            self.problem += running <= worst[t]
+            # the reserve the worst case consumes instead of importing
+            self.problem += self.variables['u_res'] >= worst[t] - running
 
     def _stage_solver(self) -> str:
         """The solver of the stage being timed: hybrid proves the joint probe on CBC and runs the rest on HiGHS.
