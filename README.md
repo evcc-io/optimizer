@@ -46,6 +46,20 @@ The maximum is a single value out of the horizon, which leaves one gap: a load s
   <img alt="Charging plan with attenuate_grid_peaks: the battery refill spread over the solar window and the feed-in held to a flat 1 kW plateau" src="docs/img/example-peak-light.png">
 </picture>
 
+## Hedging against forecast errors
+
+A schedule on the forecast alone is a bet that the forecast holds. When the solar falls short or the demand runs higher, a battery drained to its minimum overnight leaves the evening to the grid at the evening price. The optional `uncertainty` block makes that risk part of the cost.
+
+```json
+"uncertainty": {"ft_dev": 0.3, "gt_dev": 0.2, "budget": 8}
+```
+
+Every step may deliver `ft_dev` less solar and `gt_dev` more demand than forecast, but at most `budget` steps do so within a day. That is the uncertainty budget of Bertsimas and Sim: a budget of 0 trusts the forecast, a budget of the full horizon assumes every step goes wrong, which hardly ever happens and buys a lot of insurance. Something like a quarter of a day covers the usual bad afternoon. The budget may be fractional.
+
+The schedule itself stays as planned. What the model prices is the recourse. The deviations come from the forecast alone, so the worst case up to each step, the sum of the largest deviations of the day before it within the budget, is known before the solve. It looks back one day only: the schedule is replanned long before that, and counted from the start of the horizon the reserve would grow with every day planned. A shortfall up to a step drains the batteries below the plan: the reserve they hold above their minimum covers it and is priced at the export price, the least that energy would have earned, and whatever is left is imported, at the price of the step where the plan would have discharged or where the shortfall arrives. Every step is priced, so an evening no reserve can cover does not leave the other days free to drain. A cheap step can also refill the shortfall from the grid with the charge power the plan leaves unused, at the round trip, so the plan has no reason to discharge into a cheap step and charge it back. On a flat tariff a reserve buys nothing over importing the shortfall when it happens, so the hedge does not charge one from the grid. Solar surplus above what all batteries can take in a step is exported or curtailed whatever the plan, so a shortfall up to it is not counted. Export the plan only chooses is not known before the solve, so a shortfall it would absorb still counts, which leans the hedge to the safe side on sunny steps. The hedge adds three variables and six rows per step, no binaries.
+
+The reported `objective_value` is the plan's worth on the forecast as sent. A hedged plan scores a little worse there, that is the premium paid for the cover.
+
 ## How a request is solved
 
 One request is up to five solver runs under one wall clock, `OPTIMIZER_TIME_LIMIT` (10 s in production). The stage clocks are shares of it, so a slower host raises the limit and every stage scales with it. Each stage keeps what the previous one found unless it can improve on it without spending money. The request log carries where the clock went (`stages`), which path was taken (`path`), what the tie break (`preferences`) and the continuity pass (`continuity`) did, and what the cost stage found (`cost_stage_value`) against what it could not rule out (`cost_stage_gap`, currency, zero when proven).

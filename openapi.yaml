@@ -410,6 +410,35 @@ components:
           description: Grid export remuneration per Wh at each time step (currency units/Wh)
           example: [0.15, 0.12, 0.10, 0.11, 0.14, 0.16]
 
+    Uncertainty:
+      type: object
+      description: >-
+        Forecast uncertainty the schedule hedges against. Every step may deliver ft_dev less solar and
+        gt_dev more demand than forecast, but at most budget steps do so within a day. The schedule then
+        carries the extra import the worst such case forces as a cost. Omitted, or a budget of 0,
+        plans on the forecast as sent.
+      properties:
+        ft_dev:
+          type: number
+          minimum: 0
+          maximum: 1
+          default: 0
+          description: Share of the solar forecast each step may fall short of
+          example: 0.3
+        gt_dev:
+          type: number
+          minimum: 0
+          maximum: 1
+          default: 0
+          description: Share of the demand forecast each step may exceed
+          example: 0.2
+        budget:
+          type: number
+          minimum: 0
+          default: 0
+          description: Steps that deviate adversely within a day, may be fractional
+          example: 8
+
     OptimizationInput:
       type: object
       required:
@@ -420,6 +449,8 @@ components:
           type: object
           $ref: "#/components/schemas/OptimizerStrategy"
           description: Strategy preferences
+        uncertainty:
+          $ref: "#/components/schemas/Uncertainty"
         grid: 
           type: object
           $ref: "#/components/schemas/GridConfig"

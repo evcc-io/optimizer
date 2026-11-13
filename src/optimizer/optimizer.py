@@ -1,3 +1,4 @@
+import heapq
 import os
 import re
 import subprocess
@@ -6,7 +7,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import cache
-from math import isfinite
+from math import ceil, floor, isfinite
 from tempfile import TemporaryDirectory
 from typing import Dict, List, Optional
 
@@ -254,6 +255,26 @@ class TimeSeriesData:
     p_E: List[float]  # Export prices [currency unit/Wh]
 
 
+@dataclass
+class UncertaintyConfig:
+    """Forecast uncertainty the schedule hedges against, see _add_uncertainty_constraints."""
+    ft_dev: float = 0.  # share of the solar forecast that may fall short per step
+    gt_dev: float = 0.  # share of the demand forecast that may be exceeded per step
+    budget: float = 0.  # steps that deviate adversely at once, 0 disables the hedge
+
+    def active(self) -> bool:
+        return self.budget > 0 and (self.ft_dev > 0 or self.gt_dev > 0)
+
+
+# share the hedge prices protection below its worth, so a schedule that only ties the worst case
+# keeps the plan the forecast prefers
+HEDGE_TIE_DISCOUNT = 1e-3
+
+# seconds the worst case looks back. The schedule is replanned long before a day has passed, so an
+# older forecast error is behind it, and counting from the horizon start grows the reserve day by day
+HEDGE_WINDOW = 86400
+
+
 @cache
 def cbc_takes_mip_start(path: str) -> bool:
     """Whether the CBC binary at path handles a MIP start on a maximization model.
@@ -274,7 +295,8 @@ class Optimizer:
     """
 
     def __init__(self, strategy: OptimizationStrategy, grid: GridConfig, batteries: List[BatteryConfig], time_series: TimeSeriesData,
-                 eta_c: float = 0.95, eta_d: float = 0.95, M: float = 1e6, optimizer_settings: OptimizerSettings | None = None):
+                 eta_c: float = 0.95, eta_d: float = 0.95, M: float = 1e6, optimizer_settings: OptimizerSettings | None = None,
+                 uncertainty: UncertaintyConfig | None = None):
         """
         Optimizer Constructor
         """
@@ -285,6 +307,7 @@ class Optimizer:
         self.grid = grid
         self.batteries = batteries
         self.time_series = time_series
+        self.uncertainty = uncertainty or UncertaintyConfig()
         self.eta_c = eta_c
         self.eta_d = eta_d
         self.M = M
@@ -385,6 +408,7 @@ class Optimizer:
         self._setup_target_function()
         self._add_energy_balance_constraints()
         self._add_battery_constraints()
+        self._add_uncertainty_constraints()
 
     def _setup_variables(self):
         """
@@ -503,6 +527,13 @@ class Optimizer:
                 for t in self.time_steps
             ] if bat.c_max > 0 or bat.d_max > 0 else [0] * self.T
 
+        # worst case recourse cost of the forecast error, see _add_uncertainty_constraints
+        if self._hedged():
+            self.variables['u_imp'] = [self.problem.add_variable(f"u_imp_{t}", lowBound=0) for t in self.time_steps]
+            self.variables['u_imp_sum'] = [self.problem.add_variable(f"u_imp_sum_{t}", lowBound=0) for t in self.time_steps]
+            self.variables['u_chg'] = [self.problem.add_variable(f"u_chg_{t}", lowBound=0) for t in self.time_steps]
+            self.variables['u_res'] = self.problem.add_variable("u_res", lowBound=0)
+
     def _setup_target_function(self):
         """
         Gather all target function contributions and instantiate the objective
@@ -579,6 +610,17 @@ class Optimizer:
                 # negative target function contribution in a maximizing optimization
                 # decrease penalty slightly over time to push limit exceeding to late times
                 objective += - self.prc_e_grid_exp_pen * (1.0 - t * 1e-5) * self.variables['e_exp_lim_exc'][t]
+
+        # cost of the budgeted forecast error, see _add_uncertainty_constraints: the extra import it
+        # forces at the import price of the step it is drawn in, and the reserve it consumes at the
+        # export price. A negative price would reward drawing more, so it is floored at zero. A load
+        # Wh refilled through the batteries costs the round trip.
+        if self._hedged():
+            for t in self.time_steps:
+                price = max(self.time_series.p_N[t], 0) * (1 - HEDGE_TIE_DISCOUNT)
+                objective -= self.variables['u_imp'][t] * price
+                objective -= self.variables['u_chg'][t] * price / (self.eta_c * self.eta_d)
+            objective -= self.variables['u_res'] * max(np.max(self.time_series.p_E), 0) * (1 - HEDGE_TIE_DISCOUNT)
 
         # everything above is real money. It is kept separate from the preference terms below
         # because solve() optimizes the two in sequence, see _solve_preferences().
@@ -842,6 +884,94 @@ class Optimizer:
                 # Charge constraint
                 self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
                                  * (1 - self.variables['z_cd'][i][t]))
+
+    def _hedged(self) -> bool:
+        """Whether the model carries the hedge: a budget, and a step whose forecast can deviate."""
+        return self.uncertainty.active() and any(self._deviation(t) > 0 for t in self.time_steps)
+
+    def _deviation(self, t: int) -> float:
+        """Adverse forecast deviation of step t in Wh, less solar and more demand at once, beyond what the step spills anyway.
+
+        Surplus above what all batteries can take in the step is exported or curtailed whatever the
+        schedule, so a shortfall up to it only reduces that and never reaches the batteries.
+        """
+        ts = self.time_series
+        deviation = self.uncertainty.ft_dev * ts.ft[t] + self.uncertainty.gt_dev * ts.gt[t]
+        spill = ts.ft[t] - ts.gt[t] - sum(bat.c_max for bat in self.batteries) * ts.dt[t] / 3600.
+        return max(deviation - max(spill, 0), 0)
+
+    def _worst_deviation(self) -> np.ndarray:
+        """Budgeted worst case deviation per step: the largest `budget` deviations of the day up to it, Wh."""
+        # a fractional budget counts its last step in part, as in Bertsimas and Sim
+        budget = min(self.uncertainty.budget, self.T)
+        size, part = ceil(budget), budget - floor(budget)
+        end = np.cumsum(self.time_series.dt)
+        deviation = [self._deviation(t) for t in self.time_steps]
+        worst = np.zeros(self.T)
+        for t in self.time_steps:
+            first = int(np.searchsorted(end, end[t] - HEDGE_WINDOW, side='right'))
+            largest = heapq.nlargest(size, deviation[first:t + 1])
+            worst[t] = sum(largest) - ((1 - part) * largest[-1] if part and len(largest) == size else 0)
+        return worst
+
+    def _add_uncertainty_constraints(self):
+        """
+        Hedge the schedule against forecast errors with an uncertainty budget (Bertsimas and Sim).
+
+        Every step may deliver ft_dev less solar and gt_dev more demand than forecast, but no more
+        than `budget` steps do so within a day. The deviation is taken from the forecast alone, so
+        the worst case up to each step, the sum of the day's largest deviations within the budget,
+        is known before the solve and needs no dual: three variables and a handful of rows per step.
+
+        A shortfall up to step t drains the batteries below the plan. The reserve they hold above
+        s_min at t, in load Wh, covers it, and what is left has been imported by then: u_imp_sum
+        is the worst case import up to t, u_imp what step t adds at its own import price. Every
+        step is priced, so a step no reserve can cover does not leave the others free to drain.
+
+        Extra import is bounded by what the schedule discharges at that step plus the worst case
+        arriving in it: it replaces a discharge the shortfall has made impossible, or covers the
+        shortfall as it arrives, and cannot be booked ahead at a cheaper price.
+
+        What a cheap step can do is refill: u_chg is the deficit the replan charges back from the
+        grid with the charge power the schedule leaves unused, at the round trip. Without it the
+        schedule discharges into a cheap step only to book the import there, and charges it back.
+
+        The worst case looks back one day, see HEDGE_WINDOW, so it also falls, and u_imp_sum with
+        it: what was booked against deviations that have left the window is released.
+
+        The reserve the worst case consumes instead, u_res, is priced at the export price, the
+        least that energy would have earned the plan. Free, the hedge would buy a reserve from the
+        grid on a flat tariff, where a shortfall costs the same whenever it is imported.
+
+        Export the schedule only chooses is not known before the solve, so a deviation it would
+        absorb still counts.
+        """
+        if not self._hedged():
+            return
+
+        reserve_batteries = [i for i, bat in enumerate(self.batteries) if bat.d_max > 0]
+        worst = self._worst_deviation()
+
+        for t in self.time_steps:
+            running = self.variables['u_imp_sum'][t]
+            u_imp, u_chg = self.variables['u_imp'][t], self.variables['u_chg'][t]
+            self.problem += running <= (self.variables['u_imp_sum'][t - 1] if t > 0 else 0) + u_imp + u_chg
+            # extra import replaces a discharge the shortfall made impossible or covers the shortfall
+            # as it arrives, it cannot be booked ahead at a cheaper step
+            discharge = pulp.lpSum(self.variables['d'][i][t] for i in reserve_batteries)
+            self.problem += u_imp <= discharge + max(worst[t] - (worst[t - 1] if t > 0 else 0), 0)
+            # shortcut: the refill ignores a grid import limit, as u_imp does. Cap both by the import
+            # headroom once a limited request shows a reserve the limit cannot deliver
+            self.problem += u_chg <= self.eta_c * self.eta_d * pulp.lpSum(
+                self.batteries[i].c_max * self.time_series.dt[t] / 3600. - self.variables['c'][i][t]
+                for i in reserve_batteries if self.batteries[i].charge_from_grid)
+            # stored Wh reach the load at the discharge efficiency
+            reserve = self.eta_d * pulp.lpSum(self.variables['s'][i][t] - self.batteries[i].s_min
+                                              + self.variables['s_min_pen'][i][t] for i in reserve_batteries)
+            self.problem += running >= worst[t] - reserve
+            self.problem += running <= worst[t]
+            # the reserve the worst case consumes instead of importing
+            self.problem += self.variables['u_res'] >= worst[t] - running
 
     def _stage_solver(self) -> str:
         """The solver of the stage being timed: hybrid proves the joint probe on CBC and runs the rest on HiGHS.
@@ -1465,7 +1595,8 @@ class Optimizer:
 
     def get_clean_objective_value(self):
         '''
-        recalculate the objective value without penalties and strategy icentives
+        recalculate the objective value without penalties, strategy incentives and the hedge
+        against forecast errors, which is money only an adverse forecast error would cost
         '''
         clean_objective = 0
         # Grid import cost (negative because we want to minimize cost) [currency unit]

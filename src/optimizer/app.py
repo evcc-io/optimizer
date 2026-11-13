@@ -11,7 +11,16 @@ from flask_restx import Api, Resource, fields
 from werkzeug.exceptions import BadRequest
 
 from . import explain, feedback
-from .optimizer import CHARGING_STRATEGIES, DISCHARGING_STRATEGIES, BatteryConfig, GridConfig, OptimizationStrategy, Optimizer, TimeSeriesData
+from .optimizer import (
+    CHARGING_STRATEGIES,
+    DISCHARGING_STRATEGIES,
+    BatteryConfig,
+    GridConfig,
+    OptimizationStrategy,
+    Optimizer,
+    TimeSeriesData,
+    UncertaintyConfig,
+)
 from .settings import OptimizerSettings
 
 app = Flask(__name__)
@@ -206,11 +215,19 @@ time_series_model = api.model('TimeSeries', {
     'p_E': fields.List(fields.Float, required=True, description='Remuneration per Wh fed into grid at each time step'),
 })
 
+uncertainty_model = api.model('Uncertainty', {
+    'ft_dev': fields.Float(required=False, min=0, max=1, description='Share of the solar forecast each step may fall short of, 0 to 1'),
+    'gt_dev': fields.Float(required=False, min=0, max=1, description='Share of the demand forecast each step may exceed, 0 to 1'),
+    'budget': fields.Float(required=False, min=0, description='Steps that deviate adversely within a day. 0 disables the hedge'),
+})
+
 optimization_input_model = api.model('OptimizationInput', {
     'strategy': fields.Nested(strategy_model, required=False, description='Optimization strategy'),
     'grid': fields.Nested(grid_model, required=False, description='Grid import and export configuration'),
     'batteries': fields.List(fields.Nested(battery_config_model), required=True, description='Battery configurations'),
     'time_series': fields.Nested(time_series_model, required=True, description='Time series data'),
+    'uncertainty': fields.Nested(uncertainty_model, required=False,
+                                 description='Forecast uncertainty the schedule hedges against, see README'),
     'eta_c': fields.Float(required=False, default=0.95, description='Charging efficiency'),
     'eta_d': fields.Float(required=False, default=0.95, description='Discharging efficiency'),
 })
@@ -300,6 +317,18 @@ class OptimizeCharging(Resource):
                 p_E=data['time_series']['p_E'],
             )
 
+            uncertainty_data = data.get('uncertainty') or {}
+            uncertainty = UncertaintyConfig(
+                ft_dev=uncertainty_data.get('ft_dev', 0.),
+                gt_dev=uncertainty_data.get('gt_dev', 0.),
+                budget=uncertainty_data.get('budget', 0.),
+            )
+            for key, limit in (('ft_dev', 1), ('gt_dev', 1), ('budget', None)):
+                value = getattr(uncertainty, key)
+                if value < 0 or (limit is not None and value > limit):
+                    api.abort(400, "Uncertainty must be a share between 0 and 1 and a budget of steps",
+                              details={f'uncertainty.{key}': value})
+
             # Validate time series lengths. dt included: the model indexes every series by it,
             # so a short dt was an IndexError and a 500 rather than a 400 naming the series.
             lengths = {
@@ -340,7 +369,8 @@ class OptimizeCharging(Resource):
                 time_series=time_series,
                 eta_c=data.get('eta_c', 0.95),
                 eta_d=data.get('eta_d', 0.95),
-                M=1e6
+                M=1e6,
+                uncertainty=uncertainty,
             )
 
             started = time.perf_counter()
