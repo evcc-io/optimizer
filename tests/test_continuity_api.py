@@ -15,7 +15,7 @@ def test_api_returns_continuous_equal_price_sessions(second_c_min: float | None)
         model.batteries.append(replace(model.batteries[0], c_min=second_c_min))
     request = {
         'batteries': [{key: value for key, value in asdict(battery).items() if value is not None} for battery in model.batteries],
-        'time_series': asdict(model.time_series),
+        'time_series': {key: value for key, value in asdict(model.time_series).items() if value is not None},
         'eta_c': 1,
         'eta_d': 1,
     }
@@ -38,7 +38,7 @@ def test_api_keeps_a_running_session_charging():
     model.batteries[0].c_active = True
     request = {
         'batteries': [{key: value for key, value in asdict(model.batteries[0]).items() if value is not None}],
-        'time_series': asdict(model.time_series),
+        'time_series': {key: value for key, value in asdict(model.time_series).items() if value is not None},
         'eta_c': 1,
         'eta_d': 1,
     }
