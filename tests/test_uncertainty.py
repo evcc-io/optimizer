@@ -154,3 +154,33 @@ def test_the_reserve_does_not_grow_with_the_days_planned():
     assert hedged.solve()['status'] == 'Optimal'
     lowest = [min(pulp.value(hedged.variables['s'][0][t]) for t in range(day, day + 24)) for day in (24, 48)]
     assert lowest[1] == pytest.approx(lowest[0], abs=1)
+
+
+def test_the_hedge_does_not_hold_a_reserve_that_only_moves_the_import():
+    # a nearly empty battery in an expensive evening before a cheap night: held back, it covers a
+    # shortfall the grid covers at the same price, and the forecast load is imported in its place
+    def build(uncertainty=None):
+        return Optimizer(
+            strategy=OptimizationStrategy('charge_before_export', 'discharge_before_import'),
+            grid=GridConfig(p_max_imp=None, p_max_exp=None, prc_p_exc_imp=None),
+            batteries=[BatteryConfig(charge_from_grid=True, discharge_to_grid=False, s_capacity=10000,
+                                     s_min=0, s_max=10000, s_initial=300, c_min=0, c_max=5000, d_max=5000, p_a=1.5e-4)],
+            time_series=TimeSeriesData(dt=[3600] * 8, gt=[500] * 8, ft=[0] * 8,
+                                       p_N=[2.7e-4] * 2 + [1.7e-4] * 2 + [2.7e-4] * 4, p_E=[0.9e-4] * 8),
+            eta_c=0.9, eta_d=0.9, uncertainty=uncertainty)
+
+    schedules = []
+    for model in (build(), build(UncertaintyConfig(gt_dev=0.4, budget=4))):
+        assert model.solve()['status'] == 'Optimal'
+        schedules.append([pulp.value(model.variables['d'][0][t]) for t in range(2)])
+    nominal, hedged = schedules
+    # the stored 300 Wh reach the load at the discharge efficiency
+    assert sum(nominal) == pytest.approx(270, abs=1)
+    assert sum(hedged) == pytest.approx(sum(nominal), abs=1)
+
+
+def test_the_hedge_solves_without_a_battery_that_discharges():
+    # no reserve to price: every shortfall is imported
+    hedged = build(UncertaintyConfig(gt_dev=0.4, budget=2))
+    hedged.batteries[0].d_max = 0
+    assert hedged.solve()['status'] == 'Optimal'
