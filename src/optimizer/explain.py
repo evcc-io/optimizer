@@ -47,7 +47,9 @@ import and export up to the grid limits. Breaking a goal, a must charge or a gri
 any price, so it only happens when there is no other way, and the plan then says so in the first lines.
 - A charging goal is a charge level a vehicle should reach by a time, set by the owner in a charging plan. The \
 solver picks the cheapest slots before that time, in any order: among equally cheap slots which one it takes is \
-arbitrary, except that fewer charge starts are preferred.
+arbitrary, except that fewer charge starts are preferred. \
+A goal after the end of the plan is not in the input: without a goal, say no goal falls within this plan, never \
+that none is set.
 - "Must charge" is a required energy per slot: full power in fast mode, the minimum power for minimum charging, \
 full power in every slot below a price limit, full power in the last hours before a plan time for late charging, \
 and full power below the grid charge price limit for a home battery. It is dropped once the battery is full.
