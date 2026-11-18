@@ -622,7 +622,6 @@ class Optimizer:
                 objective -= self.variables['u_chg'][t] * price / (self.eta_c * self.eta_d)
             # stored Wh the plan keeps are credited at p_a, in load Wh at the discharge efficiency
             stored = max((bat.p_a for bat in self.batteries if bat.d_max > 0), default=0) / self.eta_d
-            # never cheaper than the cheapest import it could displace, so on a flat tariff reserve vs import ties
             reserve_price = max(np.max(self.time_series.p_E), stored, np.min(self.time_series.p_N), 0) * (1 - HEDGE_TIE_DISCOUNT)
             objective -= pulp.lpSum(self.variables['u_res']) * reserve_price
 
