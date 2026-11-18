@@ -126,6 +126,15 @@ def test_a_stored_case_solves_with_a_budget():
 
 
 # three equal days in hourly steps: six cheap night hours, solar around noon, the rest at the high price
+def test_a_flat_tariff_spends_the_reserve_first():
+    # stored energy is valued just below the import it replaces, which must not make holding it the cheaper recourse
+    request = json.loads(pathlib.Path('test_cases/029-hedge-spends-reserve-on-flat-tariff.json').read_text())['request']
+    response = app.test_client().post('/optimize/charge-schedule', json=request)
+    assert response.json['status'] == 'Optimal'
+    s_min = request['batteries'][0]['s_min']
+    assert min(response.json['batteries'][0]['state_of_charge'][:12]) == pytest.approx(s_min, abs=1)
+
+
 def days(uncertainty):
     return Optimizer(
         strategy=OptimizationStrategy('charge_before_export', 'none'),
