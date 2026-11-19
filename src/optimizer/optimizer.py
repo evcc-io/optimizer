@@ -798,6 +798,7 @@ class Optimizer:
             elif bat.c_min > 0:
                 # without discharge the room only shrinks, so a rest below c_min fills in one slot.
                 # The charger stops once the battery is full, that slot may charge less than c_min.
+                # A larger rest splits into slots of c_min to c_max each, so the constant bound suffices.
                 can_discharge = bat.d_max > 0
                 rest_to_fill = float('inf') if can_discharge else max(bat.s_max - bat.s_initial, 0.) / self.eta_c
                 for t in self.time_steps:
