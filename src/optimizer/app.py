@@ -15,6 +15,7 @@ from .optimizer import (
     CHARGING_STRATEGIES,
     DISCHARGING_STRATEGIES,
     BatteryConfig,
+    CircuitConfig,
     GridConfig,
     OptimizationStrategy,
     Optimizer,
@@ -201,6 +202,12 @@ battery_config_model = api.model('BatteryConfig', {
 # 100 MWh per step, far above any site evcc serves
 MAX_STEP_ENERGY = 1e8
 
+circuit_model = api.model('CircuitConfig', {
+    'p_max': fields.Float(required=True, exclusiveMin=0, example=11000, description='Maximum charge power sum of the listed batteries (W)'),
+    'batteries': fields.List(fields.Integer(min=0), required=True, min_items=1, unique=True,
+                             description='Indices into batteries of the batteries on this circuit'),
+})
+
 time_series_model = api.model('TimeSeries', {
     # the example is what the Swagger UI on / prefills, one step like its other series. A zero length step divides by zero
     'dt': fields.List(fields.Float(exclusiveMin=0), required=True, example=[3600],
@@ -228,6 +235,8 @@ optimization_input_model = api.model('OptimizationInput', {
     'time_series': fields.Nested(time_series_model, required=True, description='Time series data'),
     'uncertainty': fields.Nested(uncertainty_model, required=False,
                                  description='Forecast uncertainty the schedule hedges against, see README'),
+    'circuits': fields.List(fields.Nested(circuit_model), required=False,
+                            description='Circuits limiting the charge power sum of their batteries. Discharging is not counted.'),
     'eta_c': fields.Float(required=False, default=0.95, description='Charging efficiency'),
     'eta_d': fields.Float(required=False, default=0.95, description='Discharging efficiency'),
 })
@@ -308,6 +317,10 @@ class OptimizeCharging(Resource):
                     c_priority=bat_data.get('c_priority', 0),
                 ))
 
+            circuits = [CircuitConfig(p_max=c['p_max'], batteries=c['batteries']) for c in data.get('circuits', [])]
+            if any(i >= len(batteries) for c in circuits for i in c.batteries):
+                api.abort(400, "Circuit battery index out of range")
+
             # Parse time series data
             time_series = TimeSeriesData(
                 dt=data['time_series']['dt'],
@@ -371,6 +384,7 @@ class OptimizeCharging(Resource):
                 eta_d=data.get('eta_d', 0.95),
                 M=1e6,
                 uncertainty=uncertainty,
+                circuits=circuits,
             )
 
             started = time.perf_counter()
