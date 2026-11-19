@@ -203,7 +203,7 @@ battery_config_model = api.model('BatteryConfig', {
 MAX_STEP_ENERGY = 1e8
 
 circuit_model = api.model('CircuitConfig', {
-    'p_max': fields.Float(required=True, exclusiveMin=0, description='Maximum charge power sum of the listed batteries (W)'),
+    'p_max': fields.Float(required=True, exclusiveMin=0, example=11000, description='Maximum charge power sum of the listed batteries (W)'),
     'batteries': fields.List(fields.Integer(min=0), required=True, min_items=1, unique=True,
                              description='Indices into batteries of the batteries on this circuit'),
 })

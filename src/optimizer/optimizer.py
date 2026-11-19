@@ -897,6 +897,13 @@ class Optimizer:
                 self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
                                  * (1 - self.variables['z_cd'][i][t]))
 
+    def _add_circuit_constraints(self):
+        """Limit the charge power sum of the batteries sharing a circuit. Discharging is not counted."""
+        for circuit in self.circuits:
+            for t in self.time_steps:
+                self.problem += (pulp.lpSum(self.variables['c'][i][t] for i in circuit.batteries)
+                                 <= circuit.p_max * self.time_series.dt[t] / 3600.)
+
     def _hedged(self) -> bool:
         """Whether the model carries the hedge: a budget, and a step whose forecast can deviate."""
         return self.uncertainty.active() and any(self._deviation(t) > 0 for t in self.time_steps)
@@ -1004,14 +1011,6 @@ class Optimizer:
         if self.settings.solver == 'hybrid':
             return 'cbc' if self._stage == 'probe' else 'highs'
         return self.settings.solver
-    def _add_circuit_constraints(self):
-        """
-        Limit the charge power sum of the batteries sharing a circuit. Discharging is not counted.
-        """
-        for circuit in self.circuits:
-            for t in self.time_steps:
-                self.problem += (pulp.lpSum(self.variables['c'][i][t] for i in circuit.batteries)
-                                 <= circuit.p_max * self.time_series.dt[t] / 3600.)
 
     def _solver(self, tmpdir, **options):
         """The solver of the current stage with the shared settings. CBC writes its scratch files to tmpdir."""

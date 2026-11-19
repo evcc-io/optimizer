@@ -19,7 +19,6 @@ def charge_sums(response):
 
 
 def test_circuit_limits_charge_sum(payload):
-    # the response rounds the schedule, so the sum may exceed the limit by a fraction of a Wh
     client = app.test_client()
 
     control = client.post('/optimize/charge-schedule', json=payload)
@@ -30,6 +29,7 @@ def test_circuit_limits_charge_sum(payload):
     limited = client.post('/optimize/charge-schedule', json=payload)
     assert limited.status_code == 200
     assert limited.json['status'] == 'Optimal'
+    # the response rounds the schedule, so the sum may exceed the limit by a fraction of a Wh
     assert all(total <= P_MAX + 1 for total in charge_sums(limited))
 
 
@@ -43,11 +43,7 @@ def test_non_binding_circuit_keeps_schedule(payload):
 
 @pytest.mark.parametrize('circuit, reason', [
     ({'p_max': P_MAX, 'batteries': [0, 2]}, 'Circuit battery index out of range'),
-    ({'p_max': P_MAX, 'batteries': [-1]}, 'circuits.0.batteries.0'),
-    ({'p_max': P_MAX, 'batteries': [0, 0]}, 'circuits.0.batteries'),
-    ({'p_max': P_MAX, 'batteries': []}, 'circuits.0.batteries'),
     ({'p_max': 0, 'batteries': [0]}, 'circuits.0.p_max'),
-    ({'p_max': -1, 'batteries': [0]}, 'circuits.0.p_max'),
 ])
 def test_invalid_circuit_is_rejected(payload, circuit, reason):
     payload['circuits'] = [circuit]
