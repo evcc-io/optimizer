@@ -760,6 +760,12 @@ class Optimizer:
                         self.problem += (self.variables['s'][i][t]
                                          + self.variables['s_goal_pen'][i][t] >= bat.s_goal[t])
 
+            # without discharge the room only shrinks, so a rest below c_min fills in one slot.
+            # The charger stops once the battery is full, that slot may charge less than c_min.
+            # A larger rest splits into slots of c_min to c_max each, so the constant bound suffices.
+            can_discharge = bat.d_max > 0
+            rest_to_fill = float('inf') if can_discharge else max(bat.s_max - bat.s_initial, 0.) / self.eta_c
+
             # Constraint: Minimum battery charge demand (for t > 0)
             if bat.p_demand is not None:
                 for t in self.time_steps:
@@ -788,19 +794,14 @@ class Optimizer:
 
                     if bat.c_min > 0:
                         # set constraints to exclude charging between 0 and c_min if z_p_demand is not 1.
-                        self.problem += (self.variables['c'][i][t]
-                                         + bat.c_min * self.time_series.dt[t] / 3600. * self.variables['z_p_demand'][i][t]
-                                         >= bat.c_min * self.time_series.dt[t] / 3600. * self.variables['z_c'][i][t])
+                        c_lower = min(bat.c_min * self.time_series.dt[t] / 3600., rest_to_fill)
+                        self.problem += (self.variables['c'][i][t] + c_lower * self.variables['z_p_demand'][i][t]
+                                         >= c_lower * self.variables['z_c'][i][t])
                         self.problem += (self.variables['c'][i][t] <= bat.c_max * self.time_series.dt[t] / 3600.
                                          * self.variables['z_c'][i][t])
 
             # Constraint (7): Minimum charge power limits if there is no charge demand
             elif bat.c_min > 0:
-                # without discharge the room only shrinks, so a rest below c_min fills in one slot.
-                # The charger stops once the battery is full, that slot may charge less than c_min.
-                # A larger rest splits into slots of c_min to c_max each, so the constant bound suffices.
-                can_discharge = bat.d_max > 0
-                rest_to_fill = float('inf') if can_discharge else max(bat.s_max - bat.s_initial, 0.) / self.eta_c
                 for t in self.time_steps:
                     # Lower bound: either 0 or at least c_min
                     c_lower = min(bat.c_min * self.time_series.dt[t] / 3600., rest_to_fill)
