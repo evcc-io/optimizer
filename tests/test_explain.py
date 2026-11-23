@@ -53,6 +53,17 @@ def test_digest_spells_out_goals_demands_and_limits(payload):
     assert text.endswith('today 11:00 | 60 | 20.0 | 10.0 | 2.0 | 1.0 | 0.0/1.0 | 0.0/0.0/70')
 
 
+def test_digest_names_no_level_for_a_vehicle_without_soc(payload):
+    payload['req']['batteries'][0].update({'d_max': 0, 's_initial': 3000, 's_goal': [0, 0, 0, 8000, 0]})
+    payload['details']['batteryDetails'][0] = {'title': 'Carport', 'type': 'vehicle', 'capacity': 10, 'socUnknown': True}
+    text = explain.digest(payload)
+
+    assert 'vehicle "Carport": capacity 10.0 kWh, charge level unknown, charges 2.5 kWh in this plan, charges up to' in text
+    assert 'charging goal 5.0 kWh more by today 11:00' in text
+    assert 'now 30%' not in text
+    assert text.endswith('today 11:00 | 60 | 20.0 | 10.0 | 2.0 | 1.0 | 0.0/1.0 | 0.0/0.0/-')
+
+
 def test_digest_prices_without_subunit_in_the_currency(payload):
     payload['currency'] = 'HUF'
     assert 'today 10:00 | 15 | 0.300 | 0.100' in explain.digest(payload)

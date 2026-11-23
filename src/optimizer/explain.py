@@ -104,6 +104,7 @@ Ranges as "10:00 to 13:00".
 language you answer in.
 - Never use dashes as punctuation, write a full stop or a comma instead.
 - Never use: slot, step, horizon, objective, solver, SoC, Wh, loadpoint.
+- A vehicle with an unknown charge level shows - as its level: say how much energy it charges, never a level in %.
 - Call every vehicle and home battery by its name. Only cite numbers that are in the plan, do not compute new ones."""
 
 CHAT_TIMEOUT = 45  # seconds, below the gunicorn request timeout
@@ -183,7 +184,7 @@ def capacity_wh(bat, detail):
     return bat.get('s_capacity') or (detail['capacity'] * 1000 if detail.get('capacity') else bat['s_max']) or 1
 
 
-def battery_line(bat, detail, i, labels, capacity):
+def battery_line(bat, detail, i, labels, capacity, charged=0):
     kind = 'vehicle' if detail.get('type') == 'vehicle' else 'home battery'
     name = detail.get('name') or ''
     # untitled ui-configured devices are named db:<id>
@@ -194,10 +195,14 @@ def battery_line(bat, detail, i, labels, capacity):
     def pct(wh):
         return f'{round(wh / capacity * 100)}%'
 
+    # evcc sends the energy charged this session as state of a vehicle without soc: no level to name
+    unknown = detail.get('socUnknown')
     facts = [
         f"capacity {kwh(capacity)} kWh",
-        f"now {pct(bat['s_initial'])} ({kwh(bat['s_initial'])} kWh)",
-        f"kept between {pct(bat['s_min'])} and {pct(bat['s_max'])}",
+        *([f"charge level unknown, charges {kwh(charged)} kWh in this plan"] if unknown else [
+            f"now {pct(bat['s_initial'])} ({kwh(bat['s_initial'])} kWh)",
+            f"kept between {pct(bat['s_min'])} and {pct(bat['s_max'])}",
+        ]),
         f"charges up to {kwh(bat['c_max'])} kW" + (f", at least {kwh(bat['c_min'])} kW or not at all" if bat['c_min'] > 0 else ''),
         f"discharges up to {kwh(bat['d_max'])} kW" if bat['d_max'] > 0 else 'never discharges',
         'may charge from the grid' if bat.get('charge_from_grid') else 'no grid charging, only surplus solar',
@@ -206,7 +211,8 @@ def battery_line(bat, detail, i, labels, capacity):
         facts.append('may discharge into the grid' if bat.get('discharge_to_grid') else 'does not discharge into the grid')
     if bat.get('c_active'):
         facts.append('charging right now')
-    facts += [f'charging goal {pct(goal)} by {labels[t + 1]}' for t, goal in enumerate(bat.get('s_goal') or []) if goal > 0]
+    facts += [f'charging goal {kwh(goal - bat["s_initial"]) + " kWh more" if unknown else pct(goal)} by {labels[t + 1]}'
+              for t, goal in enumerate(bat.get('s_goal') or []) if goal > 0]
     facts += [f'must charge {run}' for run in ranges(bat.get('p_demand'), labels)]
     return title, f'{kind} "{title}": ' + ', '.join(facts)
 
@@ -220,11 +226,13 @@ def digest(payload):
     ts = req['time_series']
     labels = step_labels(ts['dt'], details.get('timestamp'))
 
-    titles, devices, capacities = [], [], []
+    titles, devices, capacities, unknown = [], [], [], []
     for i, bat in enumerate(req['batteries']):
         detail = at(details.get('batteryDetails'), i, {})
         capacities.append(capacity_wh(bat, detail))
-        title, line = battery_line(bat, detail, i, labels, capacities[-1])
+        unknown.append(bool(detail.get('socUnknown')))
+        charged = sum(at(res.get('batteries'), i, {}).get('charging_power') or [])
+        title, line = battery_line(bat, detail, i, labels, capacities[-1], charged)
         titles.append(title)
         devices.append(line)
 
@@ -255,8 +263,8 @@ def digest(payload):
             kwh(at(ts['ft'], i)), kwh(at(ts['gt'], i)),
             f"{kwh(at(res.get('grid_import'), i))}/{kwh(at(res.get('grid_export'), i))}",
             *(f"{kwh(at(b.get('charging_power'), i))}/{kwh(at(b.get('discharging_power'), i))}/"
-              f"{round(at(b.get('state_of_charge'), i) / capacity * 100)}"
-              for b, capacity in zip(res.get('batteries') or [], capacities)),
+              f"{'-' if level_unknown else round(at(b.get('state_of_charge'), i) / capacity * 100)}"
+              for b, capacity, level_unknown in zip(res.get('batteries') or [], capacities, unknown)),
         ]))
 
     return '\n'.join(lines)
