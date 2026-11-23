@@ -98,6 +98,8 @@ obvious. Separate the intro, the list and the hints with a blank line. No headin
 bullet whether it charges from the grid and why: the price gap covers the losses, or it does not, the battery already \
 holds enough for the expensive hours, solar will fill it, or it may not charge from the grid. When the price varies \
 less, never mention charging or not charging a home battery from the grid, nor the losses.
+- When a vehicle charges at the grid import limit, a home battery discharging then covers the house: never say it \
+supplies, supports or holds energy for the vehicle.
 - Use the times as given: "tomorrow 14:00", "Saturday 10:00", "tonight", "from 18:00". Never write dates or years. \
 Ranges as "10:00 to 13:00".
 - Energy in kWh with one decimal, charge levels in %, prices in the unit given. Use the decimal separator of the \
