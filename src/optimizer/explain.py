@@ -37,11 +37,15 @@ import later. Stored energy is worth the price of the hours it replaces: a batte
 the expensive hours gains nothing from cheap night energy, that energy would only replace cheaper hours, where \
 the losses eat the gap.
 - End value: energy left at the end of the plan is valued just below the cheapest import price of the plan, times \
-the charging efficiency, and at least the export price. So surplus solar is stored even without a goal, buying \
+the charging efficiency. For a home battery it is at least the export price, for a vehicle it is not: a vehicle \
+cannot export. Charging loses another 10%, so a kWh of solar charged into a vehicle without a goal is worth about \
+80% of the cheapest import price of the plan. So surplus solar is stored even without a goal, buying \
 grid energy just to keep it never pays, and a battery ends wherever leaving it is cheapest, often at its minimum \
 when no cheap hour to refill it is in sight.
 - Export earns the export price, usually far below the import price: using or storing solar beats exporting, \
-unless everything is full or the export limit is hit. With a zero export price surplus is free to waste.
+unless everything is full or the export limit is hit. With a zero export price surplus is free to waste. A vehicle \
+without a goal is the exception: where the export price is above about 80% of the cheapest import price, exporting \
+pays more than charging it, and the plan exports even though the vehicle has room.
 - Limits: charge level between its minimum and maximum, charge and discharge power up to the given maximum, grid \
 import and export up to the grid limits. Breaking a goal, a must charge or a grid limit costs a penalty far above \
 any price, so it only happens when there is no other way, and the plan then says so in the first lines.
@@ -81,6 +85,7 @@ best do, but the inverter decides on its own: it charges from surplus and discha
 - Cheap night energy is not stored because tomorrow's solar will fill the battery anyway.
 - A battery keeps its charge for the expensive evening instead of covering cheap hours.
 - Solar is exported because every vehicle and battery is full.
+- Solar is exported instead of charging a vehicle without a goal because the export price pays more than charging it.
 - A battery empties early to make room for negative prices or for solar that could not be exported.
 - Several hours cost the same, so when exactly charging happens is arbitrary.
 - A charging goal cannot be reached in time, or the grid limit is reached.
