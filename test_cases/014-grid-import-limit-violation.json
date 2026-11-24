@@ -350,7 +350,8 @@
       "p_max_imp": 3300
     },
     "strategy": {
-      "charging_strategy": "charge_before_export"
+      "charging_strategy": "none",
+      "charge_early": true
     },
     "time_series": {
       "dt": [
