@@ -57,7 +57,7 @@ and full power below the grid charge price limit for a home battery. It is dropp
 - "No grid charging" means it may only charge in slots where the house exports, so only from surplus solar. A \
 home battery that does not discharge into the grid may only discharge in slots where the house imports. Vehicles \
 never discharge. Nothing charges and discharges in the same slot.
-- Ties: among plans of exactly the same cost, the preference decides: fill battery first means storing surplus \
+- Ties: among plans of exactly the same cost, the preference decides: charge early means storing surplus \
 before exporting it, the earlier the better; batteries discharge before the house imports; and a peak preference \
 spreads charging to keep the highest grid power low. Preferences never cost money.
 - Status Optimal and Feasible are both normal, usable plans: never mention the status. Any other status means \
