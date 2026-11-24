@@ -248,7 +248,7 @@ def digest(payload):
     demands = [f"{DEMANDS[d['type']]} \"{d.get('title') or d['type']}\"" for d in details.get('demandDetails') or [] if d.get('type') in DEMANDS]
     strat = req.get('strategy') or {}
     preferences = [STRATEGIES[strat['charging_strategy']]] if strat.get('charging_strategy') in STRATEGIES else []
-    preferences += ['charge early'] if strat.get('charge_early') else []
+    preferences += ['charge early'] if strat.get('charge_early') or strat.get('charging_strategy') == 'charge_before_export' else []
     strategy = ', '.join(preferences) or 'no preference'
 
     lines = [

@@ -43,6 +43,8 @@ PEAK_STRATEGY_SIDES = {
 # away. Listed here next to the code that reads them so the API can reject the rest up front.
 CHARGING_STRATEGIES = ('none', *PEAK_STRATEGY_SIDES)
 DISCHARGING_STRATEGIES = ('none', 'discharge_before_import')
+# accepted for clients from before charge_early, read as none with charge_early set
+LEGACY_CHARGE_EARLY = 'charge_before_export'
 
 # magnitude the largest objective coefficient is placed at before the model goes to the solver.
 # CBC judges improvements against absolute tolerances (~1e-7), and with prices given per Wh the

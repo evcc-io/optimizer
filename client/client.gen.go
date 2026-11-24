@@ -86,6 +86,7 @@ const (
 	OptimizerStrategyChargingStrategyAttenuateDemandPeaks OptimizerStrategyChargingStrategy = "attenuate_demand_peaks"
 	OptimizerStrategyChargingStrategyAttenuateFeedinPeaks OptimizerStrategyChargingStrategy = "attenuate_feedin_peaks"
 	OptimizerStrategyChargingStrategyAttenuateGridPeaks   OptimizerStrategyChargingStrategy = "attenuate_grid_peaks"
+	OptimizerStrategyChargingStrategyChargeBeforeExport   OptimizerStrategyChargingStrategy = "charge_before_export"
 	OptimizerStrategyChargingStrategyNone                 OptimizerStrategyChargingStrategy = "none"
 )
 
