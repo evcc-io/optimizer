@@ -12,7 +12,7 @@ from optimizer.optimizer import BatteryConfig, GridConfig, OptimizationStrategy,
 CASES = ['012-early-charging-not-perfect',
          '019-unexpected-charge-spikes',
          '021-min-pv-use-case-with-weird-behavior']
-STRATEGIES = ['none', 'charge_before_export', 'attenuate_grid_peaks']
+STRATEGIES = ['none', 'charge_early', 'attenuate_grid_peaks']
 
 # the placement assertion is cheap, it only builds the model, so it runs over every stored case.
 # They span three orders in the largest raw coefficient, from 1.6e-1 where market prices go
@@ -32,7 +32,8 @@ def build(request, charging):
     grid = request.get('grid', {})
     stored = request.get('strategy', {})
     return Optimizer(
-        strategy=OptimizationStrategy(charging_strategy=charging,
+        strategy=OptimizationStrategy(charging_strategy='none' if charging == 'charge_early' else charging,
+                                      charge_early=charging == 'charge_early',
                                       discharging_strategy=stored.get('discharging_strategy', 'none')),
         grid=GridConfig(p_max_imp=grid.get('p_max_imp'), p_max_exp=grid.get('p_max_exp'),
                         prc_p_exc_imp=grid.get('prc_p_exc_imp')),

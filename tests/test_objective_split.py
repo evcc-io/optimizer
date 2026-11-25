@@ -35,7 +35,8 @@ def build(case):
     return Optimizer(
         strategy=OptimizationStrategy(
             charging_strategy=strategy_data.get('charging_strategy', 'none'),
-            discharging_strategy=strategy_data.get('discharging_strategy', 'none')),
+            discharging_strategy=strategy_data.get('discharging_strategy', 'none'),
+            charge_early=strategy_data.get('charge_early', False)),
         grid=GridConfig(p_max_imp=grid_data.get('p_max_imp'), p_max_exp=grid_data.get('p_max_exp'),
                         prc_p_exc_imp=grid_data.get('prc_p_exc_imp')),
         batteries=[BatteryConfig(

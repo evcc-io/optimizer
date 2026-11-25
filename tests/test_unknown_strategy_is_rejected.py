@@ -38,3 +38,30 @@ def test_unknown_strategy_is_rejected():
             strategy = {"charging_strategy": charging, "discharging_strategy": discharging}
             response = client.post("/optimize/charge-schedule", json={**request, "strategy": strategy})
             assert response.status_code == 200, f"{strategy} was rejected: {response.json}"
+
+
+def test_charge_before_export_is_charge_early():
+    # clients from before charge_early send the strategy it replaced: same plan as none with it set
+    client = app.test_client()
+    request = {
+        "batteries": [{
+            "s_min": 0, "s_max": 4000, "s_initial": 0,
+            "c_min": 0, "c_max": 2000, "d_max": 0, "p_a": 0.0004,
+        }],
+        "time_series": {
+            "dt": [3600] * 4,
+            "gt": [0] * 4,
+            "ft": [2000] * 4,
+            "p_N": [0.0003] * 4,
+            "p_E": [0.0001] * 4,
+        },
+    }
+
+    def plan(strategy):
+        response = client.post("/optimize/charge-schedule", json={**request, "strategy": strategy})
+        assert response.status_code == 200, response.json
+        return response.json["batteries"][0]["charging_power"]
+
+    legacy = plan({"charging_strategy": "charge_before_export"})
+    assert legacy == plan({"charging_strategy": "none", "charge_early": True})
+    assert legacy[:2] == [2000, 2000]

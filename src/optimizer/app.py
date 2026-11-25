@@ -14,6 +14,7 @@ from . import explain, feedback
 from .optimizer import (
     CHARGING_STRATEGIES,
     DISCHARGING_STRATEGIES,
+    LEGACY_CHARGE_EARLY,
     BatteryConfig,
     CircuitConfig,
     GridConfig,
@@ -79,6 +80,18 @@ def read_body():
     g.started = time.perf_counter()
     request.get_data(cache=True)
     g.read = time.perf_counter() - g.started
+
+
+def parse_strategy(strat_data):
+    """The request's strategy with defaults. charge_before_export, the strategy charge_early
+    replaced and still sent by clients from before the split, reads as none with charge_early."""
+    charging = strat_data.get('charging_strategy', 'none')
+    legacy = charging == LEGACY_CHARGE_EARLY
+    return OptimizationStrategy(
+        charging_strategy='none' if legacy else charging,
+        discharging_strategy=strat_data.get('discharging_strategy', 'none'),
+        charge_early=legacy or strat_data.get('charge_early', False),
+    )
 
 
 def money(value):
@@ -170,10 +183,12 @@ ns = api.namespace('optimize', description='EV Charging Optimization Operations'
 
 # Input models for API documentation
 strategy_model = api.model('OptimizationStrategy', {
-    'charging_strategy': fields.String(required=False, enum=list(CHARGING_STRATEGIES),
+    'charging_strategy': fields.String(required=False, enum=[*CHARGING_STRATEGIES, LEGACY_CHARGE_EARLY],
                                        description='Sets a strategy for charging in situations where choices are cost neutral.'),
     'discharging_strategy': fields.String(required=False, enum=list(DISCHARGING_STRATEGIES),
-                                          description='Sets a strategy for discharging in situations where choices are cost neutral.')
+                                          description='Sets a strategy for discharging in situations where choices are cost neutral.'),
+    'charge_early': fields.Boolean(required=False, description='Fill the batteries as early as possible. '
+                                   'Combines with any charging_strategy; attenuation keeps priority.')
 })
 
 grid_model = api.model('GridConfig', {
@@ -283,11 +298,7 @@ class OptimizeCharging(Resource):
             data = api.payload
 
             # Parse strategy items with default values
-            strat_data = data.get('strategy', {})
-            strategy = OptimizationStrategy(
-                charging_strategy=strat_data.get('charging_strategy', 'none'),
-                discharging_strategy=strat_data.get('discharging_strategy', 'none')
-            )
+            strategy = parse_strategy(data.get('strategy', {}))
 
             # parse grid configuration
             grid_data = data.get('grid', {})

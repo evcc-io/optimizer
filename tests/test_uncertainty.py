@@ -22,7 +22,7 @@ PRICES = [1e-4, 1e-4, 2e-4, 2e-4, 4e-4, 4e-4]
 
 def build(uncertainty=None, charge_from_grid=True):
     return Optimizer(
-        strategy=OptimizationStrategy('charge_before_export', 'none'),
+        strategy=OptimizationStrategy('none', 'none', charge_early=True),
         grid=GridConfig(p_max_imp=None, p_max_exp=None, prc_p_exc_imp=None),
         batteries=[BatteryConfig(charge_from_grid=charge_from_grid, discharge_to_grid=False, s_capacity=10000,
                                  s_min=0, s_max=10000, s_initial=2000, c_min=0, c_max=5000, d_max=5000, p_a=1e-4)],
@@ -137,7 +137,7 @@ def test_a_flat_tariff_spends_the_reserve_first():
 
 def days(uncertainty):
     return Optimizer(
-        strategy=OptimizationStrategy('charge_before_export', 'none'),
+        strategy=OptimizationStrategy('none', 'none', charge_early=True),
         grid=GridConfig(p_max_imp=None, p_max_exp=None, prc_p_exc_imp=None),
         batteries=[BatteryConfig(charge_from_grid=True, discharge_to_grid=False, s_capacity=10000,
                                  s_min=1000, s_max=10000, s_initial=5000, c_min=0, c_max=4000, d_max=5000, p_a=1.8e-4)],
@@ -170,7 +170,7 @@ def test_the_hedge_does_not_hold_a_reserve_that_only_moves_the_import():
     # shortfall the grid covers at the same price, and the forecast load is imported in its place
     def build(uncertainty=None):
         return Optimizer(
-            strategy=OptimizationStrategy('charge_before_export', 'discharge_before_import'),
+            strategy=OptimizationStrategy('none', 'discharge_before_import', charge_early=True),
             grid=GridConfig(p_max_imp=None, p_max_exp=None, prc_p_exc_imp=None),
             batteries=[BatteryConfig(charge_from_grid=True, discharge_to_grid=False, s_capacity=10000,
                                      s_min=0, s_max=10000, s_initial=300, c_min=0, c_max=5000, d_max=5000, p_a=1.5e-4)],

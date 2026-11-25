@@ -74,7 +74,8 @@
         "eta_d": 0.9,
         "grid": {},
         "strategy": {
-            "charging_strategy": "charge_before_export",
+            "charging_strategy": "none",
+            "charge_early": true,
             "discharging_strategy": "discharge_before_import"
         },
         "time_series": {
