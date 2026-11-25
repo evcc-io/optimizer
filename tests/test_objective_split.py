@@ -45,7 +45,7 @@ def build(case):
             s_min=bat['s_min'], s_max=bat['s_max'], s_initial=bat['s_initial'],
             p_demand=bat.get('p_demand'), s_goal=bat.get('s_goal'),
             c_min=bat['c_min'], c_max=bat['c_max'], d_max=bat['d_max'], p_a=bat['p_a'],
-            c_priority=bat.get('c_priority', 0)) for bat in request['batteries']],
+            c_priority=bat.get('c_priority', 0), r_departure=bat.get('r_departure')) for bat in request['batteries']],
         time_series=TimeSeriesData(dt=series['dt'], gt=series['gt'], ft=series['ft'],
                                    p_N=series['p_N'], p_E=series['p_E']),
         eta_c=request.get('eta_c', 0.95), eta_d=request.get('eta_d', 0.95), M=1e6)
